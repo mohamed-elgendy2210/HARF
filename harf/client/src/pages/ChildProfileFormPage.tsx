@@ -121,7 +121,14 @@ export function ChildProfileFormPage() {
           dateOfBirth,
         });
       }
-      navigate("/dashboard", { replace: true });
+      navigate("/dashboard/children", {
+        replace: true,
+        state: {
+          childMutationMessage: isEditing
+            ? "تم تحديث ملف الطفل بنجاح."
+            : "تمت إضافة الطفل بنجاح.",
+        },
+      });
     } catch (requestError) {
       setError(childRequestError(requestError));
     } finally {

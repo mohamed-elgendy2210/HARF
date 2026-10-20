@@ -7,6 +7,8 @@ import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { ChildProfileFormPage } from "./pages/ChildProfileFormPage";
+import { MyChildrenPage } from "./pages/MyChildrenPage";
+import { ChildSpacePage } from "./pages/ChildSpacePage";
 
 function HomeRoute() {
   const { status, user } = useAuth();
@@ -106,10 +108,26 @@ export default function App() {
         }
       />
       <Route
+        path="/dashboard/children"
+        element={
+          <ProtectedParentRoute>
+            <MyChildrenPage />
+          </ProtectedParentRoute>
+        }
+      />
+      <Route
         path="/dashboard/children/:id/edit"
         element={
           <ProtectedParentRoute>
             <ChildProfileFormPage />
+          </ProtectedParentRoute>
+        }
+      />
+      <Route
+        path="/dashboard/children/:id/space"
+        element={
+          <ProtectedParentRoute>
+            <ChildSpacePage />
           </ProtectedParentRoute>
         }
       />

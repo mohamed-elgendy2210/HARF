@@ -13,6 +13,52 @@ export interface ChildProfile {
   updatedAt: string;
 }
 
+export type ActivityType =
+  | "picture-cards-audio"
+  | "sound-to-image"
+  | "scene-completion";
+
+export interface Activity {
+  id: string;
+  title: string;
+  activityType: ActivityType;
+  description: string;
+  ageSuitability: {
+    minMonths: number;
+    maxMonths: number;
+  };
+  availability: "available" | "unavailable";
+  publicationStatus: "demo_pending_review";
+  assets: {
+    image?: string;
+    audio?: string;
+  };
+  instructions: string[];
+  items: Array<{
+    id: string;
+    label: string;
+    imageAsset?: string;
+    audioAsset?: string;
+  }>;
+  mascot?: {
+    id: string;
+    expressions: string[];
+    animationStates: string[];
+  };
+}
+
+export interface ActivitySession {
+  id: string;
+  childId: string;
+  activityId: string;
+  activityType: ActivityType;
+  status: "in_progress" | "completed" | "abandoned";
+  startedAt: string;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface UserResponse {
   user: SafeUser;
 }
@@ -23,6 +69,18 @@ interface ChildResponse {
 
 interface ChildrenResponse {
   children: ChildProfile[];
+}
+
+interface ActivitiesResponse {
+  activities: Activity[];
+}
+
+interface ActivitySessionResponse {
+  session: ActivitySession;
+}
+
+interface ActivitySessionsResponse {
+  sessions: ActivitySession[];
 }
 
 interface ApiErrorResponse {
@@ -119,6 +177,36 @@ export const childrenApi = {
     return request<void>(`/api/children/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+  },
+};
+
+export const activitiesApi = {
+  list(type?: ActivityType) {
+    const query = type ? `?type=${encodeURIComponent(type)}` : "";
+    return request<ActivitiesResponse>(`/api/activities${query}`);
+  },
+  startSession(childId: string, activityId: string) {
+    return request<ActivitySessionResponse>(
+      `/api/children/${encodeURIComponent(childId)}/activity-sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify({ activityId }),
+      },
+    );
+  },
+  listSessions(childId: string) {
+    return request<ActivitySessionsResponse>(
+      `/api/children/${encodeURIComponent(childId)}/activity-sessions`,
+    );
+  },
+  completeSession(childId: string, sessionId: string) {
+    return request<ActivitySessionResponse>(
+      `/api/children/${encodeURIComponent(childId)}/activity-sessions/${encodeURIComponent(sessionId)}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ status: "completed" }),
+      },
+    );
   },
 };
 

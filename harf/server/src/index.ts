@@ -6,6 +6,10 @@ import cors from "cors";
 import { connectToDatabase } from "./database.js";
 import { authRouter } from "./routes/auth.js";
 import { childrenRouter } from "./routes/children.js";
+import {
+  activitiesRouter,
+  childActivitySessionsRouter,
+} from "./routes/activities.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
@@ -30,6 +34,11 @@ app.get("/api/health", (_request, response) => {
 });
 
 app.use("/api/auth", authRouter);
+app.use("/api/activities", activitiesRouter);
+app.use(
+  "/api/children/:childId/activity-sessions",
+  childActivitySessionsRouter,
+);
 app.use("/api/children", childrenRouter);
 app.use(errorHandler);
 

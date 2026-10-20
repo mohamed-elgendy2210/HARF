@@ -148,12 +148,16 @@ After starting both apps, verify the frontend flow in a browser:
 9. Stop the backend briefly and try a login to confirm the client shows a
    clear connection error. Restart it afterward.
 
-The parent dashboard loads its children from `GET /api/children`. The add and
-edit form submits only `name` and `dateOfBirth` to the existing child API, and
-the dashboard supports list, edit, and confirmed delete. Age and ownership are
-validated authoritatively by the server; the form's date bounds are an
-additional convenience for the parent. No photo upload, child activity,
-booking, or specialist features are included.
+The protected “أطفالي” page loads its list from `GET /api/children`; it can be
+opened from the parent dashboard navigation. The add/edit form submits only
+`name` and `dateOfBirth` to the existing child API. Each child card includes
+edit, confirmed delete, and “ابدأ الأنشطة” actions. The activity action opens a
+placeholder child space populated from the ownership-checked
+`GET /api/children/:id` response; activities are not available in this
+milestone's frontend. The backend activity catalog and child-isolated session
+API are documented below. Age and ownership are validated authoritatively by
+the server; the form's date bounds are an additional convenience for the
+parent. No photo upload, booking, or specialist features are included.
 
 ## Child profile API (Milestone 04A)
 
@@ -198,8 +202,8 @@ login cookie in a separate PowerShell web session):
 5. As Parent B, create a child of its own; confirm Parent A's list does not
    include it and Parent A cannot retrieve, patch, or delete it.
 6. As Parent A, delete one child; confirm HTTP 204 and subsequent retrieval is
-   404. Delete behavior is hard-delete only; do not expect child-related data
-   cleanup because no such records exist yet.
+   404. Child deletion is hard-delete; activity-session cleanup is not part of
+   the child endpoint in Milestone 04A.
 7. Call each method without a login cookie and confirm HTTP 401. If available,
    try an authenticated non-parent account and confirm HTTP 403.
 8. Try a malformed ID, empty/invalid name, invalid date, future date, a date
@@ -208,3 +212,64 @@ login cookie in a separate PowerShell web session):
    400 responses and no record changes.
 9. Confirm `/api/health` still reports MongoDB readiness and `/api/auth/me`
    still returns the authenticated safe user profile.
+
+## Activity foundation (Milestone 05A)
+
+The activity API and session endpoints require an authenticated parent cookie.
+Parent identity is always taken from the verified session; child ownership is
+checked against that identity before session creation, history reads, and
+updates. A session belongs to exactly one child, and every query is scoped to
+both the parent and child. Session responses do not expose the internal
+`parentId`.
+
+The in-code catalog defines stable IDs for `picture-cards-audio`,
+`sound-to-image`, and `scene-completion`. These are demo entries only, marked
+`publicationStatus: "demo_pending_review"`; they are not clinically validated,
+diagnostic, or treatment activities and require review by a qualified
+speech-language specialist. The catalog has optional asset, instruction, item,
+and mascot-expression/animation fields, but no asset URLs or media are included.
+Its age suitability is 18 through 71 months. No activity interface is included
+in this milestone.
+
+| Method and path | Request body/query | Success response |
+| --- | --- | --- |
+| `GET /api/activities` | Optional `?type=picture-cards-audio`, `sound-to-image`, or `scene-completion` | HTTP 200: `{"activities":[{"id":"demo-picture-cards-audio","title":"بطاقات الصور والصوت","activityType":"picture-cards-audio","description":"...","ageSuitability":{"minMonths":18,"maxMonths":71},"availability":"available","publicationStatus":"demo_pending_review","assets":{},"instructions":[],"items":[]}]}` |
+| `POST /api/children/:childId/activity-sessions` | `{"activityId":"demo-picture-cards-audio"}` | HTTP 201: `{"session":{"id":"<session-id>","childId":"<child-id>","activityId":"demo-picture-cards-audio","activityType":"picture-cards-audio","status":"in_progress","startedAt":"<timestamp>","createdAt":"<timestamp>","updatedAt":"<timestamp>"}}` |
+| `GET /api/children/:childId/activity-sessions` | none | HTTP 200: `{"sessions":[{"id":"<session-id>","childId":"<child-id>","activityId":"demo-picture-cards-audio","activityType":"picture-cards-audio","status":"in_progress","startedAt":"<timestamp>","createdAt":"<timestamp>","updatedAt":"<timestamp>"}]}` |
+| `PATCH /api/children/:childId/activity-sessions/:sessionId` | `{"status":"completed"}` | HTTP 200: `{"session":{"id":"<session-id>","childId":"<child-id>","activityId":"demo-picture-cards-audio","activityType":"picture-cards-audio","status":"completed","startedAt":"<timestamp>","completedAt":"<timestamp>","createdAt":"<timestamp>","updatedAt":"<timestamp>"}}` |
+
+Session creation takes its activity type from the server catalog; clients cannot
+set parent ID, child ID, activity type, timestamps, or outcomes. Invalid child
+IDs, activity IDs/types, extra fields, and unsupported status updates are
+rejected. Unowned or missing child/session records return 404 without exposing
+other families' data. A completed session cannot be completed again and returns
+HTTP 409. `in_progress` and `completed` are the statuses currently reachable
+through the API; `abandoned` is reserved in the model for future lifecycle
+handling. Sessions store only IDs, activity type, status, timestamps, and
+parent/child references; there are no recordings, interaction traces, or
+clinical scores.
+
+Manual verification checklist (run with two distinct parent sessions):
+
+1. Log in as Parent A and retrieve `GET /api/activities`; verify all three
+   demo entries and their pending-review status. Filter by each supported type;
+   an unknown type should return HTTP 400.
+2. Create two children for Parent A. Start a session for each child using one
+   of the listed stable activity IDs; verify HTTP 201 and separate `childId`
+   values. Send an unknown activity ID, extra request fields, and a malformed
+   child ID; verify safe 400/404 responses and no session is created.
+3. Retrieve each child's history and verify each contains only its own session.
+   Restart the server and retrieve the histories again to confirm MongoDB
+   persistence.
+4. Complete one in-progress session with `{"status":"completed"}`; verify the
+   completion timestamp and status. Try an unsupported status and repeat
+   completion; expect HTTP 400 and 409 respectively.
+5. Log in as Parent B and try creating a session for Parent A's child, reading
+   its history, and completing Parent A's session while changing the child ID.
+   Verify these attempts return 404 and disclose no session data.
+6. Call activity endpoints without authentication; verify HTTP 401. Confirm
+   `/api/auth/me`, child list/create/edit/delete, `/api/health`, and the existing
+   frontend routes remain functional.
+
+No automated test framework is configured in the project; this checklist
+requires manual execution against the configured MongoDB database.
