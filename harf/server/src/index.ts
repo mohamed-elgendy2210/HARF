@@ -5,6 +5,7 @@ import cookieParser from "cookie-parser";
 import cors from "cors";
 import { connectToDatabase } from "./database.js";
 import { authRouter } from "./routes/auth.js";
+import { childrenRouter } from "./routes/children.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 const app = express();
@@ -29,6 +30,7 @@ app.get("/api/health", (_request, response) => {
 });
 
 app.use("/api/auth", authRouter);
+app.use("/api/children", childrenRouter);
 app.use(errorHandler);
 
 app.listen(port, () => {

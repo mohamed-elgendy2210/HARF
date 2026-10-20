@@ -136,10 +136,75 @@ After starting both apps, verify the frontend flow in a browser:
    profile name and shows the empty children state.
 4. Refresh the dashboard; it should remain available while `/api/auth/me`
    confirms the cookie session.
-5. Use “إضافة طفل” to see the explicitly temporary placeholder.
-6. Log out, then visit `/dashboard` directly; it should redirect to login.
-7. In browser developer tools, check that no password/token is written to
+5. Use “إضافة طفل” to open the child profile form. Enter a name and date of
+   birth between the 18-month cutoff and the day before the 6-year cutoff, then
+   save and confirm the new child appears in the dashboard list.
+6. Edit a child and save the changes. Delete a child and confirm the browser
+   asks before removal, then verify it disappears from the list.
+7. Log out, then visit `/dashboard` directly; it should redirect to login.
+8. In browser developer tools, check that no password/token is written to
    Local Storage or Session Storage. The `harf_session` cookie should be
    HttpOnly, so page JavaScript cannot read it.
-8. Stop the backend briefly and try a login to confirm the client shows a
+9. Stop the backend briefly and try a login to confirm the client shows a
    clear connection error. Restart it afterward.
+
+The parent dashboard loads its children from `GET /api/children`. The add and
+edit form submits only `name` and `dateOfBirth` to the existing child API, and
+the dashboard supports list, edit, and confirmed delete. Age and ownership are
+validated authoritatively by the server; the form's date bounds are an
+additional convenience for the parent. No photo upload, child activity,
+booking, or specialist features are included.
+
+## Child profile API (Milestone 04A)
+
+All `/api/children` endpoints require an authenticated parent cookie. Ownership
+is derived from the verified session; request bodies cannot set `parentId`.
+Responses expose only each child's `id`, `name`, `dateOfBirth`, `createdAt`,
+and `updatedAt`. Dates use the UTC `YYYY-MM-DD` format.
+
+The accepted age window is **18 months through 5 years 11 months**, calculated
+by UTC calendar date on the day of the request: date of birth must be on or
+before the 18-month cutoff, and strictly after the 6-year cutoff. Invalid
+calendar dates, future dates, and dates outside this age window are rejected.
+The model stores only name, date of birth, parent reference, and timestamps.
+Photo URLs are not supported. Deletion currently hard-deletes the child and
+returns HTTP 204; there are no child-related activity records or dependent
+collections to preserve or cascade at this milestone.
+
+| Method and path | Request body | Success response |
+| --- | --- | --- |
+| `POST /api/children` | `{"name":"Lina","dateOfBirth":"2022-04-15"}` | HTTP 201: `{"child":{"id":"<child-id>","name":"Lina","dateOfBirth":"2022-04-15","createdAt":"<timestamp>","updatedAt":"<timestamp>"}}` |
+| `GET /api/children` | none | HTTP 200: `{"children":[{"id":"<child-id>","name":"Lina","dateOfBirth":"2022-04-15","createdAt":"<timestamp>","updatedAt":"<timestamp>"}]}` |
+| `GET /api/children/:id` | none | HTTP 200: `{"child":{"id":"<child-id>","name":"Lina","dateOfBirth":"2022-04-15","createdAt":"<timestamp>","updatedAt":"<timestamp>"}}` |
+| `PATCH /api/children/:id` | `{"name":"Lina A."}` and/or `{"dateOfBirth":"2022-04-15"}` | HTTP 200 with the updated child object in `{"child":...}` |
+| `DELETE /api/children/:id` | none | HTTP 204, no response body |
+
+Unexpected fields, including `parentId`, are rejected with HTTP 400. Missing,
+malformed, or other-parent child IDs do not reveal private records; valid IDs
+that are absent or belong to another parent return the same HTTP 404 response.
+Unauthenticated requests receive HTTP 401; authenticated non-parent roles
+receive HTTP 403.
+
+Manual verification plan (use two different parent accounts and retain each
+login cookie in a separate PowerShell web session):
+
+1. Log in as Parent A and create two children using `POST /api/children`.
+   Save the returned IDs.
+2. `GET /api/children` and each `GET /api/children/:id`; confirm Parent A sees
+   only the two safe child responses.
+3. `PATCH` one child name or date of birth; confirm the changed safe profile.
+4. Log in as Parent B in a separate session. Confirm its list is empty and
+   `GET`, `PATCH`, and `DELETE` for each Parent A ID return 404.
+5. As Parent B, create a child of its own; confirm Parent A's list does not
+   include it and Parent A cannot retrieve, patch, or delete it.
+6. As Parent A, delete one child; confirm HTTP 204 and subsequent retrieval is
+   404. Delete behavior is hard-delete only; do not expect child-related data
+   cleanup because no such records exist yet.
+7. Call each method without a login cookie and confirm HTTP 401. If available,
+   try an authenticated non-parent account and confirm HTTP 403.
+8. Try a malformed ID, empty/invalid name, invalid date, future date, a date
+   younger than 18 months, a date at least 6 years old, an empty patch, an
+   unexpected field (including `parentId`), and malformed JSON. Confirm safe
+   400 responses and no record changes.
+9. Confirm `/api/health` still reports MongoDB readiness and `/api/auth/me`
+   still returns the authenticated safe user profile.

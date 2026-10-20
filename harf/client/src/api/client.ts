@@ -5,8 +5,24 @@ export interface SafeUser {
   role: "parent" | "specialist" | "admin";
 }
 
+export interface ChildProfile {
+  id: string;
+  name: string;
+  dateOfBirth: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface UserResponse {
   user: SafeUser;
+}
+
+interface ChildResponse {
+  child: ChildProfile;
+}
+
+interface ChildrenResponse {
+  children: ChildProfile[];
 }
 
 interface ApiErrorResponse {
@@ -77,6 +93,32 @@ export const authApi = {
   },
   logout() {
     return request<void>("/api/auth/logout", { method: "POST" });
+  },
+};
+
+export const childrenApi = {
+  list() {
+    return request<ChildrenResponse>("/api/children");
+  },
+  get(id: string) {
+    return request<ChildResponse>(`/api/children/${encodeURIComponent(id)}`);
+  },
+  create(input: { name: string; dateOfBirth: string }) {
+    return request<ChildResponse>("/api/children", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+  update(id: string, input: { name: string; dateOfBirth: string }) {
+    return request<ChildResponse>(`/api/children/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  },
+  delete(id: string) {
+    return request<void>(`/api/children/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   },
 };
 

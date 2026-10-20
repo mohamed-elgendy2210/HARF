@@ -6,7 +6,7 @@ import { LoadingScreen } from "./components/LoadingScreen";
 import { LoginPage } from "./pages/LoginPage";
 import { RegisterPage } from "./pages/RegisterPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { ChildPlaceholderPage } from "./pages/ChildPlaceholderPage";
+import { ChildProfileFormPage } from "./pages/ChildProfileFormPage";
 
 function HomeRoute() {
   const { status, user } = useAuth();
@@ -101,7 +101,15 @@ export default function App() {
         path="/dashboard/children/new"
         element={
           <ProtectedParentRoute>
-            <ChildPlaceholderPage />
+            <ChildProfileFormPage />
+          </ProtectedParentRoute>
+        }
+      />
+      <Route
+        path="/dashboard/children/:id/edit"
+        element={
+          <ProtectedParentRoute>
+            <ChildProfileFormPage />
           </ProtectedParentRoute>
         }
       />
