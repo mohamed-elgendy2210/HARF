@@ -151,13 +151,12 @@ After starting both apps, verify the frontend flow in a browser:
 The protected “أطفالي” page loads its list from `GET /api/children`; it can be
 opened from the parent dashboard navigation. The add/edit form submits only
 `name` and `dateOfBirth` to the existing child API. Each child card includes
-edit, confirmed delete, and “ابدأ الأنشطة” actions. The activity action opens a
-placeholder child space populated from the ownership-checked
-`GET /api/children/:id` response; activities are not available in this
-milestone's frontend. The backend activity catalog and child-isolated session
-API are documented below. Age and ownership are validated authoritatively by
-the server; the form's date bounds are an additional convenience for the
-parent. No photo upload, booking, or specialist features are included.
+edit, confirmed delete, and “ابدأ الأنشطة” actions. The child space links to
+the three demo activity pages, each loaded with the selected child ID and
+verified by the existing ownership-checked `GET /api/children/:id` endpoint.
+Age and ownership are validated authoritatively by the server; the form's date
+bounds are an additional convenience for the parent. No photo upload, booking,
+or specialist features are included.
 
 ## Child profile API (Milestone 04A)
 
@@ -227,9 +226,9 @@ The in-code catalog defines stable IDs for `picture-cards-audio`,
 `publicationStatus: "demo_pending_review"`; they are not clinically validated,
 diagnostic, or treatment activities and require review by a qualified
 speech-language specialist. The catalog has optional asset, instruction, item,
-and mascot-expression/animation fields, but no asset URLs or media are included.
-Its age suitability is 18 through 71 months. No activity interface is included
-in this milestone.
+and mascot-expression/animation fields, with local demo illustrations added in
+Milestone 05B. No Arabic audio recordings are currently included. Its age
+suitability is 18 through 71 months.
 
 | Method and path | Request body/query | Success response |
 | --- | --- | --- |
@@ -273,3 +272,131 @@ Manual verification checklist (run with two distinct parent sessions):
 
 No automated test framework is configured in the project; this checklist
 requires manual execution against the configured MongoDB database.
+
+## First picture-card activity (Milestone 05B)
+
+The protected route
+`/dashboard/children/:id/activities/picture-cards` loads the requested child
+through `GET /api/children/:id` and the activity through
+`GET /api/activities?type=picture-cards-audio`. The server verifies that the
+child belongs to the authenticated parent. Starting the activity creates an
+`in_progress` record through
+`POST /api/children/:childId/activity-sessions`; finishing it updates that
+same child-scoped session with
+`PATCH /api/children/:childId/activity-sessions/:sessionId`. A completed state
+is shown only after the API confirms completion (or the selected child's
+history confirms that a retried completion was already saved). Repeat creates
+a separate participation session. No parent ID is accepted from the client.
+
+Three original, simple SVG illustrations are included for the demo vocabulary
+`كرة`, `تفاحة`, and `شمس`:
+
+- `client/public/activities/picture-cards-audio/images/ball.svg`
+- `client/public/activities/picture-cards-audio/images/apple.svg`
+- `client/public/activities/picture-cards-audio/images/sun.svg`
+
+These illustrations and vocabulary are demo content pending review by a
+qualified speech-language specialist. They are not clinically validated and
+do not indicate diagnosis, treatment, or language-development outcomes.
+
+**Arabic audio recordings have not been provided.** Therefore, the activity
+shows a disabled, explicit “التسجيل الصوتي غير متوفر” control and does not
+pretend audio played. To add reviewed recordings later, place files at:
+
+- `client/public/activities/picture-cards-audio/audio/ball.mp3`
+- `client/public/activities/picture-cards-audio/audio/apple.mp3`
+- `client/public/activities/picture-cards-audio/audio/sun.mp3`
+
+Then set each corresponding `audioAsset` in the `demo-picture-cards-audio`
+catalog items in `server/src/data/activityCatalog.ts` to its local public path,
+for example `/activities/picture-cards-audio/audio/ball.mp3`. The client
+enables replay only when the catalog supplies an audio path; browser load or
+playback errors are shown to the user. Use clear Arabic word recordings
+reviewed for this audience; do not substitute sound effects.
+
+The activity stores only the existing session IDs, activity type, status, and
+timestamps. It does not record audio, pronunciation, accuracy, or clinical
+scores. The visual mascot marker is only a replaceable placeholder, not a
+final HARF character. Reduced-motion preferences are respected by the global
+styles.
+
+## Sound-to-image activity (Milestone 05C)
+
+The protected child-specific route
+`/dashboard/children/:id/activities/sound-to-image` loads the child through
+`GET /api/children/:id` and the activity through
+`GET /api/activities?type=sound-to-image`. The current parent-child ownership
+checks are reused. A participation record is created through
+`POST /api/children/:childId/activity-sessions` and marked complete through
+`PATCH /api/children/:childId/activity-sessions/:sessionId`; no separate
+progress store or per-selection telemetry is added.
+
+The three demo items use the existing local ball, apple, and sun illustrations
+under `client/public/activities/picture-cards-audio/images/`. The prompt audio
+files do **not** exist yet. Add reviewed Arabic recordings at:
+
+- `client/public/activities/sound-to-image/audio/ball.mp3`
+- `client/public/activities/sound-to-image/audio/apple.mp3`
+- `client/public/activities/sound-to-image/audio/sun.mp3`
+
+The catalog in `server/src/data/activityCatalog.ts` already names these
+expected local paths. Until all three files are supplied, the page explicitly
+disables starting the activity; it does not create a participation record or
+show selectable choices without the spoken prompt. Once files are added, the
+page enables playback/replay and picture choices only after playback ends.
+Playback failures remain visible and prevent selection until the word can be
+heard. Missing images show an accessible fallback.
+
+All vocabulary and illustrations remain demo content pending qualified
+speech-language specialist review. The activity is not clinically validated;
+completion is participation only, not evidence of language progress.
+
+## Scene-completion activity (Milestone 05D)
+
+The protected child-specific route
+`/dashboard/children/:id/activities/scene-completion` loads the selected child
+and the `demo-scene-completion` catalog entry. It reuses
+`GET /api/activities?type=scene-completion`,
+`POST /api/children/:childId/activity-sessions`, and
+`PATCH /api/children/:childId/activity-sessions/:sessionId`. The existing
+backend verifies that the authenticated parent owns the requested child and
+scopes the participation record accordingly. A completed screen is shown only
+after the server confirms the session update; retrying completion does not
+pretend a failed save succeeded.
+
+This demo contains a garden scene with a missing flower and a bedroom scene
+with a missing pillow. Their original local illustrations are:
+
+- `client/public/activities/scene-completion/scenes/garden.svg`
+- `client/public/activities/scene-completion/scenes/bedroom.svg`
+- `client/public/activities/scene-completion/objects/flower.svg`
+- `client/public/activities/scene-completion/objects/pillow.svg`
+
+The choices also reuse the existing ball and sun SVGs. Image load failures
+show labeled fallbacks. This activity requires no audio and creates no
+per-choice history, score, or clinical data. All scenes, vocabulary, and
+illustrations are demo content pending review by a qualified speech-language
+specialist; completion is not evidence of language development or clinical
+improvement.
+
+## Parent activity history (Milestone 06A)
+
+The protected route `/dashboard/children/:id/history` presents the selected
+child's persisted sessions. The page reuses
+`GET /api/children/:childId/activity-sessions` and
+`GET /api/activities`; no backend model or endpoint changes are needed. The
+session endpoint verifies the authenticated parent owns the child and queries
+by both the session-derived parent ID and the requested child ID. The client
+does not submit a parent ID. A history request failure is shown as an error,
+not as an empty history.
+
+Each existing session record persists parent/child references, activity ID and
+type, status, `startedAt`, optional `completedAt`, and Mongoose `createdAt` /
+`updatedAt`. Activity titles are resolved from the current activity catalog;
+they are not stored on each session. The page lists each session separately,
+including repeated sessions, and displays completed status and the actual
+`completedAt` timestamp when present. Missing completion timestamps are
+identified as unavailable rather than inferred. The displayed totals are
+derived from actual records: completed sessions count records with status
+`completed`, and distinct completed activities count unique activity IDs
+among those records. These counts describe participation only.

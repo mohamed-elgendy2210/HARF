@@ -18,6 +18,24 @@ export type ActivityType =
   | "sound-to-image"
   | "scene-completion";
 
+export interface ActivityItem {
+  id: string;
+  label: string;
+  sceneAsset?: string;
+  prompt?: string;
+  imageAsset?: string;
+  audioAsset?: string;
+  spokenWord?: string;
+  choices?: ActivityChoice[];
+  correctChoiceId?: string;
+}
+
+export interface ActivityChoice {
+  id: string;
+  label: string;
+  imageAsset?: string;
+}
+
 export interface Activity {
   id: string;
   title: string;
@@ -34,12 +52,7 @@ export interface Activity {
     audio?: string;
   };
   instructions: string[];
-  items: Array<{
-    id: string;
-    label: string;
-    imageAsset?: string;
-    audioAsset?: string;
-  }>;
+  items: ActivityItem[];
   mascot?: {
     id: string;
     expressions: string[];

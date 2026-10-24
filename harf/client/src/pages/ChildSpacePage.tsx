@@ -1,8 +1,10 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   ApiRequestError,
+  activitiesApi,
   childrenApi,
+  type Activity,
   type ChildProfile,
   getApiErrorMessage,
 } from "../api/client";
@@ -23,43 +25,79 @@ export function ChildSpacePage() {
   const { retrySessionCheck } = useAuth();
   const { id } = useParams();
   const [child, setChild] = useState<ChildProfile | null>(null);
+  const [activity, setActivity] = useState<Activity | null>(null);
+  const [soundActivity, setSoundActivity] = useState<Activity | null>(null);
+  const [sceneActivity, setSceneActivity] = useState<Activity | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  const loadChildSpace = useCallback(async (
+    isCancelled: () => boolean = () => false,
+  ) => {
     if (!id) {
       setError("رابط مساحة الطفل غير صالح.");
       setLoading(false);
       return;
     }
 
-    let cancelled = false;
     setLoading(true);
     setError("");
-    void childrenApi
-      .get(id)
-      .then(({ child: profile }) => {
-        if (!cancelled) setChild(profile);
-      })
-      .catch((requestError: unknown) => {
-        if (!cancelled) {
-          setError(getChildLoadError(requestError));
-          if (
-            requestError instanceof ApiRequestError &&
-            requestError.status === 401
-          ) {
-            void retrySessionCheck();
-          }
+    try {
+      const [
+        { child: profile },
+        { activities: pictureActivities },
+        { activities: soundActivities },
+        { activities: sceneActivities },
+      ] = await Promise.all([
+        childrenApi.get(id),
+        activitiesApi.list("picture-cards-audio"),
+        activitiesApi.list("sound-to-image"),
+        activitiesApi.list("scene-completion"),
+      ]);
+      const pictureCards = pictureActivities.find(
+        (item) =>
+          item.id === "demo-picture-cards-audio" &&
+          item.activityType === "picture-cards-audio",
+      );
+      const soundToImage = soundActivities.find(
+        (item) =>
+          item.id === "demo-sound-to-image" &&
+          item.activityType === "sound-to-image",
+      );
+      const sceneCompletion = sceneActivities.find(
+        (item) =>
+          item.id === "demo-scene-completion" &&
+          item.activityType === "scene-completion" &&
+          item.availability === "available",
+      );
+      if (!isCancelled()) {
+        setChild(profile);
+        setActivity(pictureCards ?? null);
+        setSoundActivity(soundToImage ?? null);
+        setSceneActivity(sceneCompletion ?? null);
+      }
+    } catch (requestError) {
+      if (!isCancelled()) {
+        setError(getChildLoadError(requestError));
+        if (
+          requestError instanceof ApiRequestError &&
+          requestError.status === 401
+        ) {
+          void retrySessionCheck();
         }
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      }
+    } finally {
+      if (!isCancelled()) setLoading(false);
+    }
+  }, [id, retrySessionCheck]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void loadChildSpace(() => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [id, retrySessionCheck]);
+  }, [loadChildSpace]);
 
   return (
     <main className="dashboard-page" dir="rtl">
@@ -84,9 +122,21 @@ export function ChildSpacePage() {
                 تسجيل الدخول مجددًا
               </Link>
             ) : (
-              <Link className="button button-secondary" to="/dashboard/children">
-                العودة إلى أطفالي
-              </Link>
+              <div className="activity-actions">
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => void loadChildSpace()}
+                >
+                  إعادة المحاولة
+                </button>
+                <Link
+                  className="button button-secondary"
+                  to="/dashboard/children"
+                >
+                  العودة إلى أطفالي
+                </Link>
+              </div>
             )}
           </div>
         ) : child ? (
@@ -97,17 +147,71 @@ export function ChildSpacePage() {
             <p className="child-space-description">
               هذه المساحة مرتبطة بملف الطفل الذي تحقّق منه الخادم.
             </p>
-            <div className="child-space-placeholder">
-              <span className="placeholder-badge">خطوة قادمة</span>
-              <h2>الأنشطة ستتوفر لاحقًا</h2>
-              <p>
-                لم تتم إضافة أنشطة بعد. سنعود إلى هذه المساحة عند تجهيز أنشطة
-                مناسبة في مرحلة لاحقة.
-              </p>
-              <button className="button button-primary" type="button" disabled>
-                ابدأ الأنشطة
-              </button>
-            </div>
+            <Link
+              className="button button-secondary child-space-history-link"
+              to={`/dashboard/children/${encodeURIComponent(child.id)}/history`}
+            >
+              عرض سجل الأنشطة
+            </Link>
+            {activity ? (
+              <div className="child-space-placeholder">
+                <span className="placeholder-badge">نشاط تجريبي</span>
+                <h2>{activity.title}</h2>
+                <p>{activity.description}</p>
+                <p className="activity-review-note">
+                  محتوى تجريبي قيد مراجعة مختص؛ لا يُعد تقييمًا أو علاجًا.
+                </p>
+                <Link
+                  className="button button-primary"
+                  to={`/dashboard/children/${encodeURIComponent(child.id)}/activities/picture-cards`}
+                >
+                  ابدأ بطاقات الصور
+                </Link>
+              </div>
+            ) : (
+              <div className="child-space-placeholder" role="status">
+                <p>هذا النشاط غير متاح الآن.</p>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => void loadChildSpace()}
+                >
+                  إعادة المحاولة
+                </button>
+              </div>
+            )}
+            {soundActivity && (
+              <div className="child-space-placeholder">
+                <span className="placeholder-badge">نشاط تجريبي · الصوت قيد التجهيز</span>
+                <h2>{soundActivity.title}</h2>
+                <p>{soundActivity.description}</p>
+                <p className="activity-review-note">
+                  محتوى تجريبي قيد مراجعة مختص؛ لا يُعد تقييمًا أو علاجًا.
+                </p>
+                <Link
+                  className="button button-primary"
+                  to={`/dashboard/children/${encodeURIComponent(child.id)}/activities/sound-to-image`}
+                >
+                  ابدأ نشاط الصوت والصورة
+                </Link>
+              </div>
+            )}
+            {sceneActivity && (
+              <div className="child-space-placeholder">
+                <span className="placeholder-badge">نشاط تجريبي</span>
+                <h2>{sceneActivity.title}</h2>
+                <p>{sceneActivity.description}</p>
+                <p className="activity-review-note">
+                  محتوى تجريبي يحتاج إلى مراجعة مختص؛ المشاركة ليست تقييمًا أو علاجًا.
+                </p>
+                <Link
+                  className="button button-primary"
+                  to={`/dashboard/children/${encodeURIComponent(child.id)}/activities/scene-completion`}
+                >
+                  أكمل المشهد
+                </Link>
+              </div>
+            )}
           </>
         ) : null}
       </section>

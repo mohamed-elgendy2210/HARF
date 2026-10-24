@@ -9,6 +9,10 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { ChildProfileFormPage } from "./pages/ChildProfileFormPage";
 import { MyChildrenPage } from "./pages/MyChildrenPage";
 import { ChildSpacePage } from "./pages/ChildSpacePage";
+import { PictureCardsActivityPage } from "./pages/PictureCardsActivityPage";
+import { SoundToImageActivityPage } from "./pages/SoundToImageActivityPage";
+import { SceneCompletionActivityPage } from "./pages/SceneCompletionActivityPage";
+import { ChildActivityHistoryPage } from "./pages/ChildActivityHistoryPage";
 
 function HomeRoute() {
   const { status, user } = useAuth();
@@ -120,6 +124,38 @@ export default function App() {
         element={
           <ProtectedParentRoute>
             <ChildProfileFormPage />
+          </ProtectedParentRoute>
+        }
+      />
+      <Route
+        path="/dashboard/children/:id/activities/picture-cards"
+        element={
+          <ProtectedParentRoute>
+            <PictureCardsActivityPage />
+          </ProtectedParentRoute>
+        }
+      />
+      <Route
+        path="/dashboard/children/:id/activities/sound-to-image"
+        element={
+          <ProtectedParentRoute>
+            <SoundToImageActivityPage />
+          </ProtectedParentRoute>
+        }
+      />
+      <Route
+        path="/dashboard/children/:id/activities/scene-completion"
+        element={
+          <ProtectedParentRoute>
+            <SceneCompletionActivityPage />
+          </ProtectedParentRoute>
+        }
+      />
+      <Route
+        path="/dashboard/children/:id/history"
+        element={
+          <ProtectedParentRoute>
+            <ChildActivityHistoryPage />
           </ProtectedParentRoute>
         }
       />

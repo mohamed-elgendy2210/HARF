@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" role="img" aria-labelledby="title">
+  <title id="title">حديقة فيها مكان فارغ لزهرة</title>
+  <rect width="600" height="400" rx="28" fill="#e7f6ee"/>
+  <circle cx="500" cy="82" r="42" fill="#f7c96b"/>
+  <path d="M0 267c90-48 163 10 252-14 93-25 206-30 348 13v134H0z" fill="#bde4c5"/>
+  <path d="M0 321c130-45 259 12 375-10 79-15 153-10 225 11v78H0z" fill="#89c98e"/>
+  <path d="M105 298h393l-37 58H141z" fill="#a97050"/>
+  <path d="M135 296h334" stroke="#d7a47d" stroke-width="10" stroke-linecap="round"/>
+  <path d="M298 290v-85" stroke="#568d54" stroke-width="12" stroke-linecap="round"/>
+  <path d="M296 248c-30-27-54-18-61 1 27 19 47 15 61-1zm5-29c27-27 49-20 56-1-23 20-43 17-56 1z" fill="#70ad69"/>
+  <circle cx="298" cy="187" r="34" fill="none" stroke="#f29b83" stroke-width="5" stroke-dasharray="8 8"/>
+  <path d="M279 187h38m-19-19v38" stroke="#f29b83" stroke-width="4" stroke-linecap="round"/>
+  <path d="M83 191c18-26 40-25 55 0-15 25-37 26-55 0zm21-2h38" fill="#fffdf8" stroke="#176b68" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M90 208l-12 28m54-28 12 28" stroke="#176b68" stroke-width="5" stroke-linecap="round"/>
+</svg>

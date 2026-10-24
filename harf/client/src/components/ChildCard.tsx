@@ -26,6 +26,13 @@ export function ChildCard({ child, deleting, onDelete }: ChildCardProps) {
       </div>
       <div className="child-card-actions">
         <Link
+          className="button button-secondary child-action-button"
+          to={`/dashboard/children/${encodeURIComponent(child.id)}/history`}
+          aria-label={`سجل أنشطة ${child.name}`}
+        >
+          سجل الأنشطة
+        </Link>
+        <Link
           className="button button-primary child-action-button"
           to={spacePath}
         >
