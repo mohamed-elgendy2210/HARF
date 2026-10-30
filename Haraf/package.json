@@ -1,0 +1,23 @@
+{
+  "name": "harf",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "apps/web",
+    "apps/api"
+  ],
+  "scripts": {
+    "dev": "concurrently --kill-others-on-fail --names api,web --prefix-colors blue,green \"npm run dev --workspace @harf/api\" \"npm run dev --workspace @harf/web\"",
+    "build": "npm run build --workspace @harf/web",
+    "start": "npm run start --workspace @harf/api",
+    "test": "npm run test --workspace @harf/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
