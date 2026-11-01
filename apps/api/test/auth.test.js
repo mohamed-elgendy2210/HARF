@@ -106,6 +106,19 @@ function createMemoryRepository() {
     async listDefinitions() {
       return [...gameDefinitions.values()].map((item) => structuredClone(item));
     },
+    async listPublishedDefinitionsByIds(gameIds) {
+      return [...gameDefinitions.values()]
+        .filter((item) => gameIds.includes(item.gameId)
+          && item.status === 'published'
+          && item.publishedVersion > 0)
+        .map(({ gameId, publishedVersion }) => ({ gameId, publishedVersion }));
+    },
+    async listVersionsForDefinitions(definitions) {
+      return definitions
+        .map(({ gameId, publishedVersion }) => gameVersions.get(`${gameId}:${publishedVersion}`))
+        .filter(Boolean)
+        .map((item) => structuredClone(item));
+    },
     async findDefinition(gameId) {
       const item = gameDefinitions.get(gameId);
       return item ? structuredClone(item) : null;
@@ -813,14 +826,34 @@ function createMemoryRepository() {
       if (user && !user.emailVerifiedAt) users.delete(String(id));
     },
     async createChild(data) {
+      if (data.registrationId) {
+        const existing = [...children.values()].find((child) => (
+          String(child.parentUserId) === String(data.parentUserId)
+          && child.registrationId === data.registrationId
+        ));
+        if (existing) return existing;
+      }
       const child = { ...data, _id: idFor(), createdAt: new Date(), updatedAt: new Date() };
       children.set(child._id, child);
       return child;
     },
     async listChildren(parentUserId) {
       return [...children.values()]
-        .filter((child) => String(child.parentUserId) === String(parentUserId))
+        .filter((child) => String(child.parentUserId) === String(parentUserId)
+          && ['active', 'archived'].includes(child.status))
         .sort((left, right) => right.createdAt - left.createdAt);
+    },
+    async listPendingRegistrations(parentUserId) {
+      return [...children.values()]
+        .filter((child) => String(child.parentUserId) === String(parentUserId)
+          && child.status === 'pending_registration')
+        .sort((left, right) => right.createdAt - left.createdAt);
+    },
+    async findRegistration(parentUserId, registrationId) {
+      return [...children.values()].find((child) => (
+        String(child.parentUserId) === String(parentUserId)
+        && child.registrationId === registrationId
+      )) ?? null;
     },
     async findOwnedChild(childId, parentUserId) {
       const child = children.get(String(childId));
@@ -831,6 +864,27 @@ function createMemoryRepository() {
       if (!child) return null;
       Object.assign(child, updates, { updatedAt: new Date() });
       return child;
+    },
+    async updateRegistrationDraft(childId, parentUserId, registrationDraft) {
+      const child = await this.findOwnedChild(childId, parentUserId);
+      if (!child || child.status !== 'pending_registration') return null;
+      child.registrationDraft = registrationDraft;
+      child.updatedAt = new Date();
+      return child;
+    },
+    async completeRegistration(childId, parentUserId) {
+      const child = await this.findOwnedChild(childId, parentUserId);
+      if (!child || child.status !== 'pending_registration') return null;
+      child.status = 'active';
+      delete child.registrationDraft;
+      child.updatedAt = new Date();
+      return child;
+    },
+    async listRegistrationReviews() {
+      return [...children.values()].filter((child) => (
+        child.status === 'pending_registration'
+        && child.registrationDraft?.step === 'needs_review'
+      ));
     },
     async createConsent(data) {
       const consent = { ...data, _id: idFor(), createdAt: data.createdAt ?? new Date() };
@@ -2071,14 +2125,42 @@ test('parent child profiles and consent history are isolated by owner and protec
     method: 'POST',
     cookie: parent.cookie,
     csrfToken: parent.csrfToken,
-    body: { displayName: 'سوسو', ageBand: '6-8', avatar: 'fox' }
+    body: {
+      registrationId: '401f6e5c-1d3f-4e56-8f12-89b25ab66703',
+      displayName: 'سوسو',
+      ageBand: '6-8',
+      avatar: 'fox'
+    }
   });
   assert.equal(created.status, 201);
   const { child } = await created.json();
   assert.equal(child.displayName, 'سوسو');
   assert.equal(child.ageBand, '6-8');
   assert.equal(child.avatar, 'fox');
+  assert.equal(child.status, 'pending_registration');
   assert.equal(Object.hasOwn(child, 'parentUserId'), false);
+
+  const pendingRegistrations = await request('/children/registrations/pending', { cookie: parent.cookie });
+  assert.deepEqual((await pendingRegistrations.json()).registrations.map((item) => item.id), [child.id]);
+  const duplicateCreate = await request('/children', {
+    method: 'POST',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: {
+      registrationId: '401f6e5c-1d3f-4e56-8f12-89b25ab66703',
+      displayName: 'سوسو',
+      ageBand: '6-8',
+      avatar: 'fox'
+    }
+  });
+  assert.equal((await duplicateCreate.json()).child.id, child.id);
+  const prematureActivation = await request(`/children/${child.id}`, {
+    method: 'PATCH',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: { status: 'active' }
+  });
+  assert.equal(prematureActivation.status, 409);
 
   const invalidAvatar = await request('/children', {
     method: 'POST',
@@ -2088,6 +2170,7 @@ test('parent child profiles and consent history are isolated by owner and protec
   });
   assert.equal(invalidAvatar.status, 400);
 
+  await childService.completeRegistration(parent.user._id, child.id);
   const ownList = await request('/children', { cookie: parent.cookie });
   assert.deepEqual((await ownList.json()).children.map((item) => item.id), [child.id]);
   const ownRead = await request(`/children/${child.id}`, { cookie: parent.cookie });
@@ -2235,6 +2318,7 @@ test('games provide an anonymous trial and persist parent-owned child results on
     body: { displayName: 'نجم' }
   });
   const child = (await childResponse.json()).child;
+  await childService.completeRegistration(parent.user._id, child.id);
   const otherChildResponse = await request('/children', {
     method: 'POST',
     cookie: otherParent.cookie,
@@ -2242,6 +2326,7 @@ test('games provide an anonymous trial and persist parent-owned child results on
     body: { displayName: 'طفل آخر' }
   });
   const otherChild = (await otherChildResponse.json()).child;
+  await childService.completeRegistration(otherParent.user._id, otherChild.id);
   const parentAnswer = await request('/games/word-sounds/answer', {
     method: 'POST',
     cookie: parent.cookie,
@@ -2310,6 +2395,16 @@ test('games provide an anonymous trial and persist parent-owned child results on
   const initialProgressResponse = await request(`/children/${child.id}/learning-progress`, { cookie: parent.cookie });
   const initialProgress = (await initialProgressResponse.json()).progress;
   assert.match(initialProgress.suggestedActivity.suggestionReason, /2 محاولات/);
+  const childActivitiesResponse = await request(`/children/${child.id}/learning-activities`, { cookie: parent.cookie });
+  assert.equal(childActivitiesResponse.status, 200);
+  const childActivities = (await childActivitiesResponse.json()).activities;
+  assert.deepEqual(childActivities.map(({ id }) => id), ['word-sounds', 'word-match']);
+  assert.equal(childActivities[0].activityStatus, 'available');
+  assert.equal(childActivities[1].activityStatus, 'upcoming');
+  assert.equal((await request(`/children/${child.id}/learning-activities`, { cookie: otherParent.cookie })).status, 404);
+  const unassignedGame = await request(`/games/animal-sounds?childId=${child.id}`, { cookie: parent.cookie });
+  assert.equal(unassignedGame.status, 403);
+  assert.equal((await unassignedGame.json()).error.code, 'LEARNING_ACTIVITY_UNAVAILABLE');
 
   const submissionId = '401f6e5c-1d3f-4e56-8f12-89b25ab66703';
   const fabricatedAttempt = await request('/games/word-sounds/attempts', {
@@ -3344,6 +3439,7 @@ test('administrator game library verifies uploads and publishes immutable game v
     body: { displayName: 'نجم محفوظ' }
   });
   const child = (await childResponse.json()).child;
+  await childService.completeRegistration(parent.user._id, child.id);
   await request(`/children/${child.id}/consents`, {
     method: 'POST',
     cookie: parent.cookie,

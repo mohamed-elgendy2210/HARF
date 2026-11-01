@@ -339,38 +339,63 @@ export class GameLibraryService {
   }
 
   async getPublicGames() {
-    const trialGameIds = await this.getTrialGameIds();
-    const definitions = (await this.repository.listDefinitions()).filter((definition) => (
-      definition.status === 'published' && definition.publishedVersion > 0
-    ));
-    const games = await Promise.all(definitions.map(async (definition) => {
-      const version = await this.repository.findVersion(definition.gameId, definition.publishedVersion);
-      if (!version) return null;
+    const gameIds = (await this.repository.listDefinitions())
+      .filter((definition) => (
+        definition.status === 'published' && definition.publishedVersion > 0
+      ))
+      .map(({ gameId }) => gameId);
+    return this.getPublicGamesByIds(gameIds);
+  }
+
+  async getPublicGamesByIds(gameIds) {
+    const ids = [...new Set(gameIds)];
+    if (!ids.length) return [];
+    const [definitions, trialGameIds] = await Promise.all([
+      this.repository.listPublishedDefinitionsByIds(ids),
+      this.getTrialGameIds()
+    ]);
+    const versions = await this.repository.listVersionsForDefinitions(definitions);
+    const versionsByKey = new Map(versions.map((version) => [`${version.gameId}:${version.version}`, version]));
+    const gamesById = new Map();
+    const imageAssetIds = [];
+    const versionsByGame = new Map();
+    for (const definition of definitions) {
+      const version = versionsByKey.get(`${definition.gameId}:${definition.publishedVersion}`);
+      if (!version) continue;
+      versionsByGame.set(definition.gameId, { definition, version });
+      if (version.content.companionAnimalImageAssetId) {
+        imageAssetIds.push(String(version.content.companionAnimalImageAssetId));
+      }
+    }
+    const assets = imageAssetIds.length
+      ? await this.repository.findAssetsByIds([...new Set(imageAssetIds)])
+      : [];
+    const assetsById = new Map(assets.map((asset) => [String(asset._id ?? asset.id), asset]));
+    const availableImages = new Map(await Promise.all(assets.map(async (asset) => [
+      String(asset._id ?? asset.id),
+      asset.active && asset.kind === 'image' && await this.mediaAssetService.isAvailable(asset)
+    ])));
+    for (const [gameId, { definition, version }] of versionsByGame) {
       const companionImageAssetId = version.content.companionAnimalImageAssetId;
-      const [companionImageAsset] = companionImageAssetId
-        ? await this.repository.findAssetsByIds([String(companionImageAssetId)])
-        : [];
-      const companionImageAvailable = companionImageAsset?.active
-        && companionImageAsset.kind === 'image'
-        && await this.mediaAssetService.isAvailable(companionImageAsset);
-      return {
-        id: definition.gameId,
+      const image = companionImageAssetId ? assetsById.get(String(companionImageAssetId)) : null;
+      gamesById.set(gameId, {
+        id: gameId,
         title: version.content.title,
         description: version.content.description,
         companion: version.content.companion,
         companionAnimal: version.content.companionAnimal,
-        companionAnimalImageUrl: companionImageAvailable
-          ? `/api/v1/media/${String(companionImageAsset._id ?? companionImageAsset.id)}`
+        companionAnimalImageUrl: image && availableImages.get(String(image._id ?? image.id))
+          ? `/api/v1/media/${String(image._id ?? image.id)}`
           : null,
         template: version.content.template ?? 'multiple-choice',
-        access: trialGameIds.includes(definition.gameId) ? 'trial' : 'parent',
+        access: trialGameIds.includes(gameId) ? 'trial' : 'parent',
         version: String(definition.publishedVersion),
         questionCount: version.content.template === 'spatial-relationships'
           ? version.content.spatial?.steps?.length ?? 0
           : version.content.questions.length
-      };
-    }));
-    return games.filter(Boolean);
+      });
+    }
+    return ids.map((gameId) => gamesById.get(gameId)).filter(Boolean);
   }
 
   async getPlayableGame(gameId) {

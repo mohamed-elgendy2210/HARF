@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest, getApiUrl } from '../lib/api.js';
 import { displayNameOrFallback } from '../lib/displayName.js';
 import NotificationCenter from './NotificationCenter.jsx';
@@ -32,6 +32,16 @@ const gameNames = {
   'spatial-relationships': 'فين المكان؟',
   'matching-pairs': 'لعبة توصيل الصور',
   'animal-sounds': 'اسمع صوت الحيوان'
+};
+
+const learningSkillLabels = {
+  communication: 'التواصل',
+  vocabulary: 'المفردات',
+  expression: 'التعبير',
+  listening: 'الاستماع',
+  'visual-recognition': 'التعرّف البصري',
+  attention: 'الانتباه',
+  'sound-awareness': 'الوعي بالأصوات'
 };
 
 const sections = [
@@ -119,6 +129,7 @@ export default function ParentDashboard({
   onProfileUpdated
 }) {
   const [children, setChildren] = useState([]);
+  const [pendingRegistrations, setPendingRegistrations] = useState([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [section, setSection] = useState(() => {
     const requestedSection = new URLSearchParams(window.location.search).get('section');
@@ -126,6 +137,12 @@ export default function ParentDashboard({
   });
   const [selectedChildId, setSelectedChildId] = useState('');
   const [editingChild, setEditingChild] = useState(null);
+  const [childRegistration, setChildRegistration] = useState(null);
+  const [registrationRequestId, setRegistrationRequestId] = useState('');
+  const [registrationConsent, setRegistrationConsent] = useState(false);
+  const [registrationDraftSaving, setRegistrationDraftSaving] = useState(false);
+  const registrationDraftSaveQueue = useRef(Promise.resolve());
+  const registrationDraftSaveCount = useRef(0);
   const [consentChildId, setConsentChildId] = useState('');
   const [consents, setConsents] = useState([]);
   const [attempts, setAttempts] = useState([]);
@@ -196,8 +213,12 @@ export default function ParentDashboard({
     setLoadingChildren(true);
     clearError();
     try {
-      const result = await apiRequest('/api/v1/children');
+      const [result, pendingResult] = await Promise.all([
+        apiRequest('/api/v1/children'),
+        apiRequest('/api/v1/children/registrations/pending')
+      ]);
       setChildren(result.children);
+      setPendingRegistrations(pendingResult.registrations);
       setSelectedChildId((current) => (
         result.children.some((child) => child.id === current)
           ? current
@@ -215,6 +236,36 @@ export default function ParentDashboard({
   useEffect(() => {
     loadChildren();
   }, []);
+
+  useEffect(() => {
+    if (!childRegistration?.child?.id || !childRegistration.questionnaire?.version) return undefined;
+    const timer = window.setTimeout(async () => {
+      const saveDraft = () => apiRequest(`/api/v1/children/${childRegistration.child.id}/registration-draft`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionnaireVersion: childRegistration.questionnaire.version,
+          submissionId: childRegistration.submissionId,
+          answers: childRegistration.answers,
+          step: childRegistration.step
+        })
+      });
+      const saveRequest = registrationDraftSaveQueue.current.then(saveDraft, saveDraft);
+      registrationDraftSaveQueue.current = saveRequest;
+      registrationDraftSaveCount.current += 1;
+      setRegistrationDraftSaving(true);
+      try {
+        await saveRequest;
+      } catch (requestError) {
+        reportError(requestError);
+      } finally {
+        registrationDraftSaveCount.current -= 1;
+        setRegistrationDraftSaving(registrationDraftSaveCount.current > 0);
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [childRegistration?.child?.id, childRegistration?.questionnaire?.version,
+    childRegistration?.submissionId, childRegistration?.answers, childRegistration?.step]);
 
   useEffect(() => {
     if (!selectedChildId || !['progress', 'activity'].includes(section)) {
@@ -551,9 +602,197 @@ export default function ParentDashboard({
 
   const startCreate = () => {
     setEditingChild(null);
+    setChildRegistration(null);
+    setRegistrationConsent(false);
+    const requestId = window.crypto.randomUUID();
+    window.sessionStorage.setItem('harf-child-registration-request', requestId);
+    setRegistrationRequestId(requestId);
     clearError();
     setNotice('');
     setSection('addChild');
+  };
+
+  const beginChildRegistration = async (child, draft = null) => {
+    setChildRegistration({
+      child,
+      questionnaire: null,
+      answers: draft?.answers ?? {},
+      submissionId: draft?.submissionId ?? window.crypto.randomUUID(),
+      step: draft?.step === 'needs_review' ? 'needs_review'
+        : draft?.step === 'review' ? 'review' : 'questionnaire',
+      recommendations: null,
+      selectedPathKeys: []
+    });
+    setRegistrationConsent(false);
+    setSection('addChild');
+    clearError();
+    setNotice('');
+    try {
+      const { questionnaire } = await apiRequest(
+        `/api/v1/children/${child.id}/learning-questionnaire`
+      );
+      const isDraftCurrent = draft?.questionnaireVersion === questionnaire.version;
+      setChildRegistration((current) => current?.child.id === child.id ? ({
+        ...current,
+        questionnaire,
+        answers: isDraftCurrent ? draft.answers ?? {} : {},
+        submissionId: isDraftCurrent && draft.submissionId
+          ? draft.submissionId
+          : window.crypto.randomUUID(),
+        step: isDraftCurrent && draft.step === 'needs_review' ? 'needs_review'
+          : isDraftCurrent && draft.step === 'review' ? 'review' : 'questionnaire'
+      }) : current);
+      if (draft?.questionnaireVersion && !isDraftCurrent) {
+        setNotice('تم تحديث الاستبيان منذ آخر مرة. ابدأ بالإصدار الحالي، وستظل بيانات المسودة السابقة محفوظة دون خلط الإصدارات.');
+      }
+    } catch (requestError) {
+      reportError(requestError);
+    }
+  };
+
+  const resumeChildRegistration = (child) => {
+    void beginChildRegistration(child, child.registrationDraft);
+  };
+
+  const setChildRegistrationAnswer = (question, optionId, checked = true) => {
+    setChildRegistration((current) => {
+      if (!current) return current;
+      const answers = { ...current.answers };
+      if (question.type === 'multiple') {
+        const selected = new Set(answers[question.id] ?? []);
+        if (checked) selected.add(optionId);
+        else selected.delete(optionId);
+        if (selected.size) answers[question.id] = [...selected];
+        else delete answers[question.id];
+      } else {
+        answers[question.id] = optionId;
+      }
+      return {
+        ...current,
+        answers,
+        submissionId: window.crypto.randomUUID(),
+        step: 'questionnaire',
+        recommendations: null,
+        selectedPathKeys: []
+      };
+    });
+  };
+
+  const registrationQuestionsComplete = (registration) => (
+    registration?.questionnaire?.questions.every((question) => {
+      const answer = registration.answers[question.id];
+      if (!question.required) return true;
+      return question.type === 'multiple'
+        ? Array.isArray(answer) && answer.length > 0
+        : typeof answer === 'string' && answer.length > 0;
+    }) ?? false
+  );
+
+  const questionnaireAnswersComplete = (questionnaire, answers) => (
+    questionnaire.questions.every((question) => {
+      const answer = answers[question.id];
+      if (!question.required) return true;
+      return question.type === 'multiple'
+        ? Array.isArray(answer) && answer.length > 0
+        : typeof answer === 'string' && answer.length > 0;
+    })
+  );
+
+  const previewNewChildPaths = async () => {
+    if (!childRegistration || !registrationQuestionsComplete(childRegistration)) {
+      setError('أجب عن جميع الأسئلة المطلوبة قبل المتابعة.');
+      return;
+    }
+    setLearningSetupBusy(true);
+    clearError();
+    try {
+      const result = await apiRequest(
+        `/api/v1/children/${childRegistration.child.id}/learning-recommendations`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            questionnaireVersion: childRegistration.questionnaire.version,
+            submissionId: childRegistration.submissionId,
+            ageBand: childRegistration.child.ageBand,
+            answers: childRegistration.answers
+          })
+        }
+      );
+      setChildRegistration((current) => current ? ({
+        ...current,
+        step: 'recommendations',
+        recommendations: result,
+        selectedPathKeys: result.recommendations.map(({ key }) => key)
+      }) : current);
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLearningSetupBusy(false);
+    }
+  };
+
+  const completeNewChildRegistration = async () => {
+    if (!childRegistration?.recommendations) return;
+    if (!registrationConsent) {
+      setError('لإكمال التسجيل، وافق أولًا على حفظ بيانات أنشطة التعلّم لهذا الملف.');
+      return;
+    }
+    if (childRegistration.recommendations.recommendations.length
+      && !childRegistration.selectedPathKeys.length) {
+      setError('اختر مسارًا تعليميًا واحدًا على الأقل للمتابعة.');
+      return;
+    }
+    setLearningSetupBusy(true);
+    clearError();
+    try {
+      const child = childRegistration.child;
+      const consentResult = await apiRequest(`/api/v1/children/${child.id}/consents`);
+      const currentLearningConsent = consentResult.consents.find((item) => item.consentType === 'learning_data');
+      if (!currentLearningConsent?.granted) {
+        const { consent } = await apiRequest(`/api/v1/children/${child.id}/consents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ consentType: 'learning_data', granted: true })
+        });
+        setConsents(consentResult.consents.map((item) => (
+          item.consentType === consent.consentType ? consent : item
+        )));
+      } else {
+        setConsents(consentResult.consents);
+      }
+      const result = await apiRequest(`/api/v1/children/${child.id}/complete-registration`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionnaireVersion: childRegistration.questionnaire.version,
+          submissionId: childRegistration.submissionId,
+          ageBand: child.ageBand,
+          answers: childRegistration.answers,
+          pathKeys: childRegistration.selectedPathKeys
+        })
+      });
+      if (result.needsReview) {
+        setChildRegistration((current) => current ? ({ ...current, step: 'needs_review' }) : current);
+        setPendingRegistrations((current) => current.map((item) => item.id === child.id
+          ? { ...item, registrationDraft: { ...item.registrationDraft, step: 'needs_review' } }
+          : item));
+        setNotice('حُفظت الإجابات، لكن لم يتوفر مسار مناسب بعد. سيبقى الملف قيد الإعداد إلى أن تتوفر توصية مناسبة.');
+        return;
+      }
+      setChildren((current) => [result.child, ...current.filter((item) => item.id !== result.child.id)]);
+      setPendingRegistrations((current) => current.filter((item) => item.id !== result.child.id));
+      setSelectedChildId(result.child.id);
+      setChildRegistration(null);
+      window.sessionStorage.removeItem('harf-child-registration-request');
+      setRegistrationRequestId('');
+      setSection('profile');
+      setNotice('اكتمل إعداد ملف الطفل وتعيين المسار التعليمي.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLearningSetupBusy(false);
+    }
   };
 
   const startLearningSetup = async () => {
@@ -563,17 +802,34 @@ export default function ParentDashboard({
     setLearningSetupBusy(true);
     const child = selectedChild;
     try {
-      const { questionnaire } = await apiRequest(
-        `/api/v1/children/${child.id}/learning-questionnaire`
-      );
+      const [{ questionnaire }, { response }] = await Promise.all([
+        apiRequest(`/api/v1/children/${child.id}/learning-questionnaire`),
+        apiRequest(`/api/v1/children/${child.id}/learning-questionnaire-response`)
+      ]);
       if (selectedChildId !== child.id) return;
+      const currentQuestionIds = new Set(questionnaire.questions.map(({ id }) => id));
+      const currentOptionIds = new Set(questionnaire.questions.flatMap(({ options }) => options.map(({ id }) => id)));
+      const responseMatchesQuestionnaire = response?.questionnaireVersion === questionnaire.version;
+      const savedAnswers = Object.fromEntries(Object.entries(responseMatchesQuestionnaire ? response.answers : {})
+        .filter(([questionId]) => currentQuestionIds.has(questionId))
+        .map(([questionId, answer]) => [
+          questionId,
+          Array.isArray(answer)
+            ? answer.filter((optionId) => currentOptionIds.has(optionId))
+            : currentOptionIds.has(answer) ? answer : null
+        ])
+        .filter(([, answer]) => answer !== null && (!Array.isArray(answer) || answer.length > 0)));
       setLearningSetup({
         questionnaire,
-        answers: {},
+        previousResponse: response,
+        answers: savedAnswers,
         submissionId: window.crypto.randomUUID(),
         recommendations: null,
         selectedPathKeys: []
       });
+      if (response && !responseMatchesQuestionnaire) {
+        setNotice('تم تحديث الاستبيان منذ آخر إجابة محفوظة. ابدأ بالإصدار الحالي، وستظل الإجابة السابقة محفوظة دون خلط الإصدارات.');
+      }
     } catch (requestError) {
       reportError(requestError);
     } finally {
@@ -589,17 +845,28 @@ export default function ParentDashboard({
         const selected = new Set(nextAnswers[question.id] ?? []);
         if (checked) selected.add(optionId);
         else selected.delete(optionId);
-        nextAnswers[question.id] = [...selected];
+        if (selected.size) nextAnswers[question.id] = [...selected];
+        else delete nextAnswers[question.id];
       } else {
         nextAnswers[question.id] = optionId;
       }
-      return { ...current, answers: nextAnswers, recommendations: null, selectedPathKeys: [] };
+      return {
+        ...current,
+        answers: nextAnswers,
+        submissionId: window.crypto.randomUUID(),
+        recommendations: null,
+        selectedPathKeys: []
+      };
     });
   };
 
   const previewLearningPaths = async (event) => {
     event.preventDefault();
     if (!learningSetup || !selectedChild) return;
+    if (!questionnaireAnswersComplete(learningSetup.questionnaire, learningSetup.answers)) {
+      setError('أجب عن جميع الأسئلة المطلوبة قبل المتابعة.');
+      return;
+    }
     const child = selectedChild;
     const setup = learningSetup;
     setLearningSetupBusy(true);
@@ -632,10 +899,14 @@ export default function ParentDashboard({
     }
   };
 
-  const confirmLearningPaths = async () => {
+  const confirmLearningPaths = async ({ keepCurrentPath = false } = {}) => {
     if (!learningSetup || !selectedChild || !learningSetup.recommendations) return;
     if (!currentConsent('learning_data')) {
       setError('فعّل موافقة حفظ أنشطة التعلّم من ملف الطفل قبل حفظ الاستبيان والتعيينات.');
+      return;
+    }
+    if (!keepCurrentPath && !learningSetup.selectedPathKeys.length) {
+      setError('اختر مسارًا مقترحًا أو احتفظ بالمسار الحالي مع حفظ الإجابات.');
       return;
     }
     setLearningSetupBusy(true);
@@ -653,13 +924,15 @@ export default function ParentDashboard({
             submissionId: setup.submissionId,
             ageBand: child.ageBand,
             answers: setup.answers,
-            pathKeys: setup.selectedPathKeys
+            pathKeys: keepCurrentPath ? [] : setup.selectedPathKeys
           })
         }
       );
       setLearningSetup(null);
       setLearningRefresh((current) => current + 1);
-      setNotice('تم حفظ إجاباتك وتعيين المسارات المختارة للطفل.');
+      setNotice(keepCurrentPath
+        ? 'تم حفظ إجاباتك دون تغيير المسارات الحالية.'
+        : 'تم حفظ إجاباتك وتحديث المسارات التي اخترتها. تم الاحتفاظ بسجل التعيينات والتقدم السابق.');
     } catch (requestError) {
       reportError(requestError);
     } finally {
@@ -669,6 +942,7 @@ export default function ParentDashboard({
 
   const startEdit = (child) => {
     setEditingChild(child);
+    setChildRegistration(null);
     setSelectedChildId(child.id);
     clearError();
     setNotice('');
@@ -700,15 +974,20 @@ export default function ParentDashboard({
         setNotice('تم تحديث ملف الطفل.');
         setSection('profile');
       } else {
+        const requestId = registrationRequestId
+          || window.sessionStorage.getItem('harf-child-registration-request')
+          || window.crypto.randomUUID();
+        window.sessionStorage.setItem('harf-child-registration-request', requestId);
         const result = await apiRequest('/api/v1/children', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({ ...payload, registrationId: requestId })
         });
-        setChildren((current) => [result.child, ...current]);
-        setSelectedChildId(result.child.id);
-        setNotice('تم إنشاء ملف الطفل. يمكنك إدارة موافقات مشاركة البيانات من ملفه.');
-        setSection('profile');
+        setPendingRegistrations((current) => [
+          { ...result.child, registrationDraft: { step: 'questionnaire', answers: {} } },
+          ...current.filter((item) => item.id !== result.child.id)
+        ]);
+        await beginChildRegistration(result.child);
       }
       setEditingChild(null);
     } catch (requestError) {
@@ -965,6 +1244,18 @@ export default function ParentDashboard({
           {children.length === 0
             ? <ProgressNotice>لم تضف ملفات أطفال بعد. يمكنك إنشاء ملف باسم مختصر وفئة عمرية اختيارية.</ProgressNotice>
             : <div className="child-list">{children.map(renderChildCard)}</div>}
+          {pendingRegistrations.length > 0 && (
+            <section className="dashboard-pending-registrations" aria-labelledby="pending-registrations-title">
+              <h4 id="pending-registrations-title">إعدادات تسجيل غير مكتملة</h4>
+              {pendingRegistrations.map((child) => (
+                <article className="dashboard-pending-registration" key={child.id}>
+                  <div><strong>{child.displayName}</strong><span>أكمل الاستبيان وتأكيد المسار لبدء استخدام الأنشطة.</span></div>
+                  <button type="button" className="button button--small button--primary"
+                    onClick={() => resumeChildRegistration(child)}>استكمال الإعداد</button>
+                </article>
+              ))}
+            </section>
+          )}
         </div>
       );
     }
@@ -982,6 +1273,18 @@ export default function ParentDashboard({
           {children.length === 0
             ? <ProgressNotice>لا توجد ملفات أطفال بعد.</ProgressNotice>
             : <div className="child-list">{children.map(renderChildCard)}</div>}
+          {pendingRegistrations.length > 0 && (
+            <section className="dashboard-pending-registrations" aria-labelledby="pending-registrations-list-title">
+              <h4 id="pending-registrations-list-title">استكمال تسجيل طفل</h4>
+              {pendingRegistrations.map((child) => (
+                <article className="dashboard-pending-registration" key={child.id}>
+                  <div><strong>{child.displayName}</strong><span>لم يكتمل تسجيل الملف بعد.</span></div>
+                  <button type="button" className="button button--small button--primary"
+                    onClick={() => resumeChildRegistration(child)}>استكمال الإعداد</button>
+                </article>
+              ))}
+            </section>
+          )}
         </section>
       );
     }
@@ -1332,6 +1635,171 @@ export default function ParentDashboard({
     }
 
     if (section === 'addChild') {
+      if (childRegistration) {
+        const stepLabels = ['معلومات الطفل', 'استبيان وليّ الأمر', 'مراجعة الإجابات', 'المسار المقترح'];
+        const currentStep = childRegistration.step === 'questionnaire' ? 1
+          : childRegistration.step === 'review' ? 2 : 3;
+        const answerLabels = (question) => {
+          const answer = childRegistration.answers[question.id];
+          const selected = Array.isArray(answer) ? answer : answer ? [answer] : [];
+          return question.options.filter((option) => selected.includes(option.id)).map(({ label }) => label);
+        };
+        return (
+          <section className="dashboard-section child-registration">
+            <header className="child-registration__heading">
+              <span className="dashboard-eyebrow">إعداد ملف {childRegistration.child.displayName}</span>
+              <h3>لنقترح بداية تعليمية مناسبة</h3>
+              <p>أجب عن الاستبيان القصير، راجع اختياراتك، ثم اختر المسار التعليمي المقترح.</p>
+            </header>
+            <ol className="child-registration__steps" aria-label="خطوات تسجيل الطفل">
+              {stepLabels.map((label, index) => (
+                <li className={index <= currentStep ? 'is-current' : ''} key={label}>
+                  <span>{index + 1}</span><small>{label}</small>
+                </li>
+              ))}
+            </ol>
+            {!childRegistration.questionnaire ? (
+              <div className="dashboard-empty-state" role="status">
+                <p>الاستبيان غير متاح مؤقتًا. لم يكتمل تسجيل الطفل بعد.</p>
+                <button type="button" className="button button--outline" disabled={learningSetupBusy}
+                  onClick={() => void beginChildRegistration(
+                    childRegistration.child,
+                    childRegistration.child.registrationDraft
+                  )}>
+                  {learningSetupBusy ? 'جارٍ المحاولة…' : 'إعادة المحاولة'}
+                </button>
+              </div>
+            ) : childRegistration.step === 'needs_review' ? (
+              <div className="dashboard-learning-recommendations">
+                <h4>نحتاج إلى مراجعة إعداد المسار</h4>
+                <p>حُفظت إجاباتك، لكن لم يتوفر مسار منشور مناسب لها حاليًا. لن نعيّن مسارًا غير ملائم، وسيظل الملف غير مفعّل حتى تتوفر بداية تعليمية مناسبة.</p>
+                <button type="button" className="button button--primary"
+                  onClick={() => setChildRegistration((current) => current ? ({
+                    ...current,
+                    step: 'questionnaire',
+                    recommendations: null,
+                    selectedPathKeys: []
+                  }) : current)}>
+                  مراجعة الإجابات والمحاولة مجددًا
+                </button>
+              </div>
+            ) : childRegistration.step === 'questionnaire' ? (
+              <div className="child-registration__panel">
+                <h4>استبيان وليّ الأمر</h4>
+                <p>تُستخدم الإجابات لاقتراح أنشطة تعليمية فقط، وليست تشخيصًا أو تقييمًا طبيًا. الأسئلة التي تحمل «مطلوب» يجب الإجابة عنها.</p>
+                {childRegistration.questionnaire.questions.map((question, index) => (
+                  <fieldset className="child-registration__question" key={question.id}>
+                    <legend>{index + 1}. {question.text} {question.required && <strong>مطلوب</strong>}</legend>
+                    {question.helpText && <p>{question.helpText}</p>}
+                    {question.options.map((option) => (
+                      <label className="dashboard-learning-answer" key={option.id}>
+                        <input
+                          type={question.type === 'multiple' ? 'checkbox' : 'radio'}
+                          name={`registration-${question.id}`}
+                          checked={question.type === 'multiple'
+                            ? (childRegistration.answers[question.id] ?? []).includes(option.id)
+                            : childRegistration.answers[question.id] === option.id}
+                          onChange={(event) => setChildRegistrationAnswer(question, option.id, event.target.checked)}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ))}
+                <div className="child-registration__actions">
+                  <span role="status">{registrationDraftSaving ? 'جارٍ حفظ إجاباتك…' : 'تُحفظ الإجابات تلقائيًا'}</span>
+                  <button type="button" className="button button--primary"
+                    disabled={!registrationQuestionsComplete(childRegistration) || registrationDraftSaving}
+                    onClick={() => setChildRegistration((current) => current ? ({ ...current, step: 'review' }) : current)}>
+                    مراجعة الإجابات
+                  </button>
+                </div>
+              </div>
+            ) : childRegistration.step === 'review' ? (
+              <div className="child-registration__panel">
+                <h4>راجع إجاباتك</h4>
+                <p>يمكنك تعديل إجابتك قبل احتساب التوصية.</p>
+                {childRegistration.questionnaire.questions.map((question) => {
+                  const labels = answerLabels(question);
+                  return (
+                    <article className="child-registration__review-item" key={question.id}>
+                      <strong>{question.text}</strong>
+                      <span>{labels.length ? labels.join('، ') : 'لم تتم الإجابة (اختياري)'}</span>
+                    </article>
+                  );
+                })}
+                <div className="child-registration__actions">
+                  <button type="button" className="button button--outline"
+                    onClick={() => setChildRegistration((current) => current ? ({ ...current, step: 'questionnaire' }) : current)}>
+                    تعديل الإجابات
+                  </button>
+                  <button type="button" className="button button--primary"
+                    disabled={learningSetupBusy || registrationDraftSaving}
+                    onClick={() => void previewNewChildPaths()}>
+                    {learningSetupBusy ? 'جارٍ تحديد المسار…' : 'مراجعة الإجابات وتحديد المسار'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="child-registration__panel">
+                <h4>المسار التعليمي المقترح لطفلك</h4>
+                <p>بناءً على الإجابات التي قدمتها، نقترح أن يبدأ طفلك بالمسار التالي. يمكنك مراجعة الأنشطة والاختيار قبل التأكيد.</p>
+                {childRegistration.recommendations.recommendations.map((recommendation) => (
+                  <label className="dashboard-learning-recommendation" key={recommendation.key}>
+                    <input type="checkbox"
+                      checked={childRegistration.selectedPathKeys.includes(recommendation.key)}
+                      onChange={(event) => setChildRegistration((current) => current ? ({
+                        ...current,
+                        selectedPathKeys: event.target.checked
+                          ? [...current.selectedPathKeys, recommendation.key]
+                          : current.selectedPathKeys.filter((key) => key !== recommendation.key)
+                      }) : current)} />
+                    <span>
+                      <strong>{recommendation.title}{recommendation.assignmentType === 'complementary' ? ' · مسار تكميلي' : ' · المسار الأساسي'}</strong>
+                      <small>{recommendation.description}</small>
+                      <small>أهداف التعلّم: {(recommendation.objectives ?? []).map((skillId) => learningSkillLabels[skillId] ?? skillId).join('، ') || 'أهداف تعليمية متدرجة'}</small>
+                      <small>سبب الاقتراح: {recommendation.reason}</small>
+                      <small>الأنشطة: {recommendation.activities.map((activity) => activity.title).join('، ')}</small>
+                    </span>
+                  </label>
+                ))}
+                {childRegistration.recommendations.recommendations.length === 0 && (
+                  <ProgressNotice>لا يوجد مسار مناسب متاح الآن. يمكنك مراجعة إجاباتك أو الانتظار حتى يراجع المسؤول إعداد المسارات.</ProgressNotice>
+                )}
+                <label className="child-registration__consent">
+                  <input type="checkbox" checked={registrationConsent}
+                    onChange={(event) => setRegistrationConsent(event.target.checked)} />
+                  <span>أوافق على حفظ إجابات هذا الاستبيان ونتائج أنشطة التعلّم لهذا الملف. يمكنني إدارة الموافقة لاحقًا من ملف الطفل.</span>
+                </label>
+                <p className="dashboard-privacy-note">هذا المسار اقتراح تعليمي مبني على إجابات وليّ الأمر، ويمكن تعديله وفقًا لاحتياجات الطفل ومتابعة تقدمه. ولا يُعد تشخيصًا طبيًا.</p>
+                <div className="child-registration__actions">
+                  <button type="button" className="button button--outline"
+                    disabled={learningSetupBusy}
+                    onClick={() => setChildRegistration((current) => current ? ({ ...current, step: 'review' }) : current)}>
+                    العودة للمراجعة
+                  </button>
+                  <button type="button" className="button button--primary"
+                    disabled={learningSetupBusy || registrationDraftSaving || !registrationConsent
+                      || (childRegistration.recommendations.recommendations.length > 0
+                        && childRegistration.selectedPathKeys.length === 0)}
+                    onClick={() => void completeNewChildRegistration()}>
+                    {learningSetupBusy
+                      ? 'جارٍ إكمال الإعداد…'
+                      : childRegistration.recommendations.recommendations.length
+                        ? 'تأكيد المسار وبدء رحلة الطفل'
+                        : 'حفظ الإجابات وإرسالها للمراجعة'}
+                  </button>
+                </div>
+              </div>
+            )}
+            <button type="button" className="auth-text-button"
+              onClick={() => {
+                setChildRegistration(null);
+                setSection('children');
+              }}>إيقاف مؤقت والعودة</button>
+          </section>
+        );
+      }
       return (
         <form className="auth-form child-form dashboard-form" onSubmit={saveChild}>
           <p className="auth-description">
@@ -1392,7 +1860,7 @@ export default function ParentDashboard({
             <button type="button" className="button button--outline" onClick={() => {
               selectSection('progress');
               startLearningSetup();
-            }}>إعداد مسارات التعلّم</button>
+            }}>تحديث بيانات وتقييم الطفل</button>
             <button type="button" className="button button--outline" onClick={() => selectSection('activity')}>سجل الأنشطة</button>
             <button type="button" className="button button--outline" disabled={busy} onClick={() => toggleConsents(selectedChild)}>
               {consentChildId === selectedChild.id ? 'إخفاء الموافقات' : 'إدارة الموافقات'}
@@ -1417,19 +1885,22 @@ export default function ParentDashboard({
             <div className="dashboard-section-heading__actions">
               <button type="button" className="button button--small button--outline" onClick={() => selectSection('activity')}>كل الأنشطة</button>
               <button type="button" className="button button--small button--primary" disabled={learningSetupBusy || selectedChild.status !== 'active'} onClick={startLearningSetup}>
-                {learningSetupBusy ? 'جارٍ التحميل…' : 'إعداد مسارات التعلّم'}
+                {learningSetupBusy ? 'جارٍ التحميل…' : 'تحديث بيانات وتقييم الطفل'}
               </button>
             </div>
           </div>
           {learningSetup && (
             <form className="dashboard-learning-setup" onSubmit={previewLearningPaths}>
               <div>
-                <h4>استبيان وليّ الأمر</h4>
-                <p>تُستخدم اختياراتك لاقتراح أنشطة تعليمية فقط، ويمكنك مراجعة المسارات قبل حفظها.</p>
+                <h4>تحديث الاستبيان</h4>
+                <p>تُستخدم إجاباتك لاقتراح أنشطة تعليمية فقط. الإجابات السابقة محفوظة، وأي توصية جديدة لن تغيّر المسار الحالي حتى تختار حفظها.</p>
+                {learningSetup.previousResponse && (
+                  <small>آخر إجابة محفوظة: {formatDate(learningSetup.previousResponse.createdAt)}</small>
+                )}
               </div>
               {learningSetup.questionnaire.questions.map((question) => (
                 <fieldset key={question.id}>
-                  <legend>{question.text}</legend>
+                  <legend>{question.text}{question.required ? ' · مطلوب' : ' · اختياري'}</legend>
                   {question.helpText && <p>{question.helpText}</p>}
                   {question.options.map((option) => (
                     <label className="dashboard-learning-answer" key={option.id}>
@@ -1449,7 +1920,7 @@ export default function ParentDashboard({
               ))}
               <div className="dashboard-learning-setup__actions">
                 <button type="submit" className="button button--primary" disabled={learningSetupBusy}>
-                  {learningSetupBusy ? 'جارٍ إعداد الاقتراحات…' : 'عرض التوصيات'}
+                {learningSetupBusy ? 'جارٍ إعداد الاقتراحات…' : 'عرض التوصيات الجديدة'}
                 </button>
                 <button type="button" className="button button--outline" disabled={learningSetupBusy} onClick={() => setLearningSetup(null)}>إلغاء</button>
               </div>
@@ -1485,10 +1956,19 @@ export default function ParentDashboard({
                       <button type="button" className="button button--outline" onClick={() => selectSection('profile')}>مراجعة موافقات الملف</button>
                     </div>
                   )}
-                  <button type="button" className="button button--primary"
-                    disabled={learningSetupBusy || learningSetup.selectedPathKeys.length === 0 || !currentConsent('learning_data')}
-                    onClick={confirmLearningPaths}>
-                    {learningSetupBusy ? 'جارٍ الحفظ…' : 'حفظ الاختيارات'}
+                  {learningSetup.selectedPathKeys.length > 0 && (
+                    <button type="button" className="button button--primary"
+                      disabled={learningSetupBusy || !currentConsent('learning_data')}
+                      onClick={() => void confirmLearningPaths()}>
+                      {learningSetupBusy ? 'جارٍ الحفظ…' : 'تأكيد المسارات المختارة'}
+                    </button>
+                  )}
+                  <button type="button" className="button button--outline"
+                    disabled={learningSetupBusy || !currentConsent('learning_data')}
+                    onClick={() => void confirmLearningPaths({ keepCurrentPath: true })}>
+                    {learningSetup.recommendations.recommendations.length
+                      ? 'حفظ الإجابات والاحتفاظ بالمسار الحالي'
+                      : 'حفظ الإجابات دون تغيير المسارات'}
                   </button>
                 </div>
               )}

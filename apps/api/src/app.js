@@ -155,6 +155,7 @@ export function createApp({
     app.use(`${API_PREFIX}/admin`, createAdminRouter({
       authService,
       authenticationMiddleware,
+      childService,
       gameLibraryService,
       learningPathService,
       subscriptionService,

@@ -208,6 +208,29 @@ export class LearningPathService {
     };
   }
 
+  async saveRegistrationDraft(parentUserId, childId, input) {
+    const child = await this.childService.getOwnedChild(parentUserId, childId);
+    if (child.status !== 'pending_registration') {
+      throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'لا يمكن استئناف تسجيل هذا الملف.');
+    }
+    const questionnaire = await this.repository.getActiveQuestionnaire();
+    if (!questionnaire || questionnaire.version !== input.questionnaireVersion) {
+      throw new AppError(409, 'LEARNING_QUESTIONNAIRE_OUTDATED', 'تم تحديث الاستبيان. أعد فتحه للمتابعة بالإصدار الحالي.');
+    }
+    return this.childService.saveRegistrationDraft(parentUserId, childId, {
+      step: input.step,
+      questionnaireVersion: input.questionnaireVersion,
+      submissionId: input.submissionId,
+      answers: input.answers
+    });
+  }
+
+  async getLatestQuestionnaireResponse(parentUserId, childId) {
+    await this.childService.getOwnedChild(parentUserId, childId);
+    const [response] = await this.repository.listQuestionnaireResponses(parentUserId, childId);
+    return response ?? null;
+  }
+
   async getAdminQuestionnaire() {
     const questionnaire = await this.repository.getActiveQuestionnaire();
     if (!questionnaire) throw new AppError(503, 'LEARNING_QUESTIONNAIRE_UNAVAILABLE', 'لم يتم إعداد استبيان تعلّم منشور بعد.');
@@ -250,7 +273,9 @@ export class LearningPathService {
 
   async previewRecommendations(parentUserId, childId, input) {
     const child = await this.childService.getOwnedChild(parentUserId, childId);
-    if (child.status !== 'active') throw new AppError(409, 'CHILD_PROFILE_ARCHIVED', 'أعد تفعيل ملف الطفل لإعداد مسارات التعلّم.');
+    if (!['active', 'pending_registration'].includes(child.status)) {
+      throw new AppError(409, 'CHILD_PROFILE_ARCHIVED', 'أعد تفعيل ملف الطفل لإعداد مسارات التعلّم.');
+    }
     const questionnaire = await this.repository.getActiveQuestionnaire();
     if (!questionnaire || questionnaire.version !== input.questionnaireVersion) {
       throw new AppError(409, 'LEARNING_QUESTIONNAIRE_OUTDATED', 'تم تحديث الاستبيان. أعد فتحه قبل المتابعة.');
@@ -268,6 +293,10 @@ export class LearningPathService {
         continue;
       }
       const values = Array.isArray(selected) ? selected : [selected];
+      if (question.required && values.length === 0) {
+        throw new AppError(400, 'LEARNING_QUESTIONNAIRE_INCOMPLETE', 'أجب عن جميع الأسئلة المطلوبة.');
+      }
+      if (values.length === 0 && !question.required) continue;
       if ((question.type === 'single' && (values.length !== 1 || Array.isArray(selected)))
         || (question.type === 'multiple' && !Array.isArray(selected))
         || new Set(values).size !== values.length) {
@@ -316,6 +345,14 @@ export class LearningPathService {
           key: path.key,
           title: path.title,
           description: path.description,
+          objectives: path.objectives ?? [],
+          skillIds: path.skillIds ?? rules.skillIds ?? [],
+          activities: path.activities.map(({ gameId, title, learningArea, description }) => ({
+            gameId,
+            title,
+            learningArea,
+            description
+          })),
           assignmentType: rules.assignmentType === 'complementary' ? 'complementary' : 'primary',
           priority: rules.priority ?? 0,
           matchCount,
@@ -344,7 +381,9 @@ export class LearningPathService {
       this.childService.getOwnedChild(parentUserId, childId),
       this.childService.listConsents(parentUserId, childId)
     ]);
-    if (child.status !== 'active') throw new AppError(409, 'CHILD_PROFILE_ARCHIVED', 'أعد تفعيل ملف الطفل قبل حفظ مسارات التعلّم.');
+    if (!['active', 'pending_registration'].includes(child.status)) {
+      throw new AppError(409, 'CHILD_PROFILE_ARCHIVED', 'أعد تفعيل ملف الطفل قبل حفظ مسارات التعلّم.');
+    }
     if (!consents.some((consent) => consent.consentType === 'learning_data' && consent.granted)) {
       throw new AppError(403, 'LEARNING_CONSENT_REQUIRED', 'يلزم تفعيل موافقة حفظ أنشطة التعلّم قبل حفظ الاستبيان والمسارات.');
     }
@@ -393,12 +432,60 @@ export class LearningPathService {
         actorUserId: parentUserId
       }));
     }
+    if (keys.length > 0
+      && typeof this.repository.listChildAssignments === 'function'
+      && typeof this.repository.updateAssignment === 'function') {
+      const selectedKeys = new Set(keys);
+      const currentAssignments = await this.repository.listChildAssignments(parentUserId, childId);
+      for (const assignment of currentAssignments.filter(({ status, pathKey }) => (
+        status === 'active' && !selectedKeys.has(pathKey)
+      ))) {
+        await this.repository.updateAssignment(parentUserId, childId, assignment.pathKey, {
+          status: 'removed',
+          historyEntry: {
+            action: 'removed',
+            reason: 'تم تحديث المسار بعد مراجعة وليّ الأمر للتوصية الجديدة.',
+            actorUserId: parentUserId,
+            source: 'parent',
+            createdAt: this.now()
+          }
+        });
+      }
+    }
     await this.audit({ _id: parentUserId }, 'parent.learning_paths_assigned', {
       childId,
       pathKeys: keys,
       questionnaireVersion: input.questionnaireVersion
     });
     return { assignments: assigned };
+  }
+
+  async completeChildRegistration(parentUserId, childId, input) {
+    const child = await this.childService.getOwnedChild(parentUserId, childId);
+    if (child.status !== 'pending_registration') {
+      if (child.status === 'active') return { child: await this.childService.completeRegistration(parentUserId, childId), alreadyCompleted: true };
+      throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'لا يمكن إكمال تسجيل هذا الملف.');
+    }
+    const preview = await this.previewRecommendations(parentUserId, childId, input);
+    if (!preview.recommendations.length) {
+      await this.confirmPathAssignments(parentUserId, childId, { ...input, pathKeys: [] });
+      await this.childService.saveRegistrationDraft(parentUserId, childId, {
+        step: 'needs_review',
+        questionnaireVersion: input.questionnaireVersion,
+        submissionId: input.submissionId,
+        answers: input.answers
+      });
+      return { child: null, assignments: [], needsReview: true };
+    }
+    if (!input.pathKeys.length) {
+      throw new AppError(400, 'LEARNING_ASSIGNMENT_REQUIRED', 'اختر مسارًا تعليميًا واحدًا على الأقل للمتابعة.');
+    }
+    const result = await this.confirmPathAssignments(parentUserId, childId, input);
+    if (!result.assignments.length) {
+      throw new AppError(409, 'LEARNING_ASSIGNMENT_REQUIRED', 'يجب تعيين مسار تعليمي قبل إكمال تسجيل الطفل.');
+    }
+    const activeChild = await this.childService.completeRegistration(parentUserId, childId);
+    return { child: activeChild, assignments: result.assignments, needsReview: false };
   }
 
   async getChildLearningOverview(parentUserId, childId) {
@@ -554,6 +641,25 @@ export class LearningPathService {
 
   async listAdminAssignments(childId) {
     return this.repository.listAdminAssignments(childId);
+  }
+
+  async listRegistrationReviews() {
+    const records = await this.childService.listRegistrationReviews();
+    return Promise.all(records.map(async (record) => {
+      const questionnaire = record.questionnaireVersion
+        ? await this.repository.getQuestionnaireVersion(record.questionnaireVersion)
+        : null;
+      const labels = new Map((questionnaire?.questions ?? []).flatMap(({ id, text, options }) => (
+        options.map(({ id: optionId, label }) => [optionId, { questionId: id, question: text, label }])
+      )));
+      const answers = Object.entries(record.answers).flatMap(([questionId, answer]) => (
+        (Array.isArray(answer) ? answer : [answer]).map((optionId) => ({
+          question: labels.get(optionId)?.question ?? questionId,
+          answer: labels.get(optionId)?.label ?? 'اختيار غير متاح'
+        }))
+      ));
+      return { ...record, answers };
+    }));
   }
 
   async reviewAssignment(actor, parentUserId, childId, pathKey, status, reason = '') {
@@ -724,20 +830,14 @@ export class LearningPathService {
       }
       return;
     }
-    const assignments = await this.repository.listChildAssignments(parentUserId, childId);
-    const activePaths = [];
-    for (const assignment of assignments.filter(({ status }) => status === 'active')) {
-      const path = await this.repository.getPathByKey(assignment.pathKey);
-      if (path?.status === 'published' && path.activities.some((activity) => activity.gameId === gameId)) {
-        activePaths.push(path);
-      }
-    }
-    if (!activePaths.length) return;
     const progress = await this.getChildLearningOverview(parentUserId, childId);
     const selectedActivities = progress.paths
-      .filter(({ key }) => activePaths.some((path) => path.key === key))
+      .filter(({ status }) => status === 'active' || status === 'completed')
       .flatMap(({ activities }) => activities.filter((activity) => activity.gameId === gameId));
-    if (selectedActivities.length > 0 && selectedActivities.every(({ status }) => status === 'upcoming')) {
+    if (selectedActivities.length === 0) {
+      throw new AppError(403, 'LEARNING_ACTIVITY_UNAVAILABLE', 'هذا النشاط غير مُدرج في مسار تعلّم نشط لهذا الطفل.');
+    }
+    if (selectedActivities.every(({ status }) => status === 'upcoming')) {
       throw new AppError(409, 'LEARNING_ACTIVITY_LOCKED', 'أكملوا النشاط المتاح في المسار أولًا. يمكنكم تكرار الأنشطة السابقة في أي وقت.');
     }
   }

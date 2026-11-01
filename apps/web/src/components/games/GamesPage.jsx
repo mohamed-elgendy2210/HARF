@@ -57,15 +57,25 @@ function GameHeader({ backHref = '/games', showAuth = true, immersive = false, o
 
 function GameCatalog({ settings }) {
   const [games, setGames] = useState([]);
+  const [assignedPaths, setAssignedPaths] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const childId = new URLSearchParams(window.location.search).get('childId') ?? '';
 
   useEffect(() => {
     let active = true;
-    apiRequest('/api/v1/games')
-      .then(({ games: catalog }) => {
-        if (active) setGames(catalog);
+    setLoading(true);
+    setError('');
+    setGames([]);
+    setAssignedPaths([]);
+    const request = childId
+      ? apiRequest(`/api/v1/children/${encodeURIComponent(childId)}/learning-activities`)
+      : apiRequest('/api/v1/games');
+    request
+      .then((catalog) => {
+        if (!active) return;
+        setGames(childId ? catalog.activities : catalog.games);
+        if (childId) setAssignedPaths(catalog.paths);
       })
       .catch((requestError) => {
         if (active) setError(requestError.message);
@@ -76,7 +86,7 @@ function GameCatalog({ settings }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [childId]);
 
   return (
     <div className="game-page game-page--catalog" style={{
@@ -88,16 +98,33 @@ function GameCatalog({ settings }) {
       '--ink': settings.colors.ink ?? '#273DA8',
       '--muted': settings.colors.muted ?? '#7884B5'
     }}>
-      <GameHeader backHref="/" logoUrl={settings.logoUrl} />
+      <GameHeader backHref={childId ? `/dashboard?section=profile&childId=${encodeURIComponent(childId)}` : '/'} logoUrl={settings.logoUrl} />
       <main className="game-page__main">
         <header className="game-page__intro">
           <span className="dashboard-eyebrow">حرف · ألعاب تعليمية</span>
-          <h1>اختاروا لعبة وابدأوا معًا</h1>
-          <p>أنشطة قصيرة للتدرب على أصوات الحروف والكلمات. النتائج تعليمية وليست تشخيصًا.</p>
+          <h1>{childId ? 'أنشطة المسار التعليمي' : 'اختاروا لعبة وابدأوا معًا'}</h1>
+          <p>{childId
+            ? assignedPaths.length
+              ? `الأنشطة المعروضة تخص ${assignedPaths.map(({ title }) => title).join('، ')}.`
+              : 'أنشطة قصيرة للتدرب على أصوات الحروف والكلمات. النتائج تعليمية وليست تشخيصًا.'
+            : 'أنشطة قصيرة للتدرب على أصوات الحروف والكلمات. النتائج تعليمية وليست تشخيصًا.'}</p>
         </header>
         {loading && <p className="dashboard-loading" role="status">جارٍ تحميل الألعاب…</p>}
         {error && <p className="game-error" role="alert">{error}</p>}
-        {!loading && !error && (
+        {!loading && !error && childId && assignedPaths.length === 0 && (
+          <section className="game-message-card" role="status">
+            <h2>لم يتم تحديد المسار التعليمي لطفلك بعد.</h2>
+            <p>يرجى إكمال الاستبيان حتى نتمكن من تحديد الأنشطة التعليمية المناسبة لطفلك.</p>
+            <a className="button button--primary"
+              href={`/dashboard?section=profile&childId=${encodeURIComponent(childId)}`}>
+              الانتقال إلى ملف الطفل لإكمال الاستبيان
+            </a>
+          </section>
+        )}
+        {!loading && !error && childId && assignedPaths.length > 0 && games.length === 0 && (
+          <p className="game-message-card" role="status">المسار التعليمي الحالي لا يحتوي على أنشطة متاحة حاليًا.</p>
+        )}
+        {!loading && !error && (!childId || assignedPaths.length > 0) && games.length > 0 && (
           <div className="game-catalog" aria-label="الألعاب المتاحة">
             {games.map((game) => (
               <article className={`game-card${game.access === 'trial' ? ' game-card--trial' : ''}`} key={game.id}>
@@ -110,15 +137,20 @@ function GameCatalog({ settings }) {
                 <h2>{game.title}</h2>
                 <p>{game.description}</p>
                 <span className="game-card__meta">{game.questionCount} أسئلة قصيرة · {game.companion}</span>
-                <a className="button button--primary" href={gameHref(game.id, childId)}>
-                  {game.access === 'trial' ? 'جرّب اللعبة' : 'ابدأ النشاط'}
-                </a>
+                {game.activityStatus === 'upcoming'
+                  ? <button className="button button--primary" type="button" disabled>نشاط قادم في المسار</button>
+                  : <a className="button button--primary" href={gameHref(game.id, childId)}>
+                    {game.access === 'trial' ? 'جرّب اللعبة' : game.activityStatus === 'completed' ? 'إعادة النشاط' : 'ابدأ النشاط'}
+                  </a>}
                 {game.access !== 'trial' && (
                   <small>يتطلب حساب ولي أمر معتمدًا، وموافقة حفظ بيانات التعلّم لحفظ النتيجة.</small>
                 )}
               </article>
             ))}
           </div>
+        )}
+        {!loading && !error && !childId && games.length === 0 && (
+          <p className="game-message-card" role="status">لا توجد ألعاب متاحة حاليًا.</p>
         )}
       </main>
     </div>
@@ -237,10 +269,12 @@ function GamePlay({ gameId }) {
       })
       .catch((requestError) => {
         if (!active) return;
-        setActivityAccess(requestError.status === 409
-          ? 'locked'
-          : requestError.status === 403 ? 'consent-required' : 'unavailable');
-        if (requestError.status !== 403 && requestError.status !== 409) setError(requestError.message);
+        setActivityAccess(requestError.code === 'LEARNING_CONSENT_REQUIRED'
+          ? 'consent-required'
+          : requestError.status === 409 ? 'locked' : 'unavailable');
+        if (requestError.code !== 'LEARNING_CONSENT_REQUIRED' && requestError.status !== 409) {
+          setError(requestError.message);
+        }
       });
     return () => {
       active = false;
@@ -515,6 +549,9 @@ function GamePlay({ gameId }) {
                   <p className="game-consent-note" role="status">
                     هذا النشاط قادم في المسار. أكملوا النشاط المتاح أولًا، ويمكنكم تكرار الأنشطة السابقة.
                   </p>
+                )}
+                {activityAccess === 'unavailable' && error && (
+                  <p className="game-consent-note" role="alert">{error}</p>
                 )}
               </section>
             )}

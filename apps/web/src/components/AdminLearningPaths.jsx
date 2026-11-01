@@ -47,6 +47,7 @@ export default function AdminLearningPaths({ logoUrl }) {
   const [tab, setTab] = useState('paths');
   const [paths, setPaths] = useState([]);
   const [availableGames, setAvailableGames] = useState([]);
+  const [registrationReviews, setRegistrationReviews] = useState([]);
   const [editingPath, setEditingPath] = useState(null);
   const [questionnaire, setQuestionnaire] = useState(null);
   const [assignments, setAssignments] = useState([]);
@@ -59,15 +60,17 @@ export default function AdminLearningPaths({ logoUrl }) {
     setLoading(true);
     setError('');
     try {
-      const [pathData, questionnaireData, assignmentData] = await Promise.all([
+      const [pathData, questionnaireData, assignmentData, reviewData] = await Promise.all([
         apiRequest('/api/v1/admin/learning-paths'),
         apiRequest('/api/v1/admin/learning-questionnaire'),
-        apiRequest('/api/v1/admin/learning-assignments')
+        apiRequest('/api/v1/admin/learning-assignments'),
+        apiRequest('/api/v1/admin/learning-registration-reviews')
       ]);
       setPaths(pathData.paths);
       setAvailableGames(pathData.availableGames);
       setQuestionnaire(questionnaireData.questionnaire);
       setAssignments(assignmentData.assignments);
+      setRegistrationReviews(reviewData.reviews);
       setEditingPath((current) => current
         ? pathData.paths.find((path) => path.key === current.key) ?? current
         : null);
@@ -310,6 +313,9 @@ export default function AdminLearningPaths({ logoUrl }) {
         <button type="button" aria-selected={tab === 'paths'} onClick={() => setTab('paths')}>المسارات</button>
         <button type="button" aria-selected={tab === 'questionnaire'} onClick={() => setTab('questionnaire')}>استبيان وليّ الأمر</button>
         <button type="button" aria-selected={tab === 'assignments'} onClick={() => setTab('assignments')}>تعيينات الأطفال</button>
+        <button type="button" aria-selected={tab === 'reviews'} onClick={() => setTab('reviews')}>
+          حالات تحتاج مراجعة{registrationReviews.length ? ` (${registrationReviews.length})` : ''}
+        </button>
       </div>
       {error && <p className="auth-error" role="alert">{error}</p>}
       {notice && <p className="auth-success" role="status">{notice}</p>}
@@ -797,6 +803,24 @@ export default function AdminLearningPaths({ logoUrl }) {
           ))}
           {assignments.length === 0 && <p className="dashboard-empty-state">لا توجد تعيينات حتى الآن.</p>}
         </div>
+      )}
+      {!loading && tab === 'reviews' && (
+        <section className="admin-learning-path__activities" aria-label="حالات التسجيل التي لم تجد مسارًا">
+          <h3>أطفال بانتظار مسار تعليمي مناسب</h3>
+          <p>حُفظت الإجابات، لكن قواعد المسارات المنشورة لم تنتج توصية. راجع الإجابات، وحدّث إعداد المسار المناسب عند الحاجة؛ لا يُفعّل ملف الطفل قبل تعيين مسار.</p>
+          {registrationReviews.map((review) => (
+            <article className="admin-dashboard-panel admin-learning-assignment" key={review.childId}>
+              <div>
+                <strong>{review.displayName} · ملف {review.childId.slice(-8)}</strong>
+                <p>إصدار الاستبيان: {review.questionnaireVersion ?? 'غير متاح'}</p>
+                {review.answers.map((answer, index) => (
+                  <small key={`${answer.question}-${index}`}>{answer.question}: {answer.answer}</small>
+                ))}
+              </div>
+            </article>
+          ))}
+          {registrationReviews.length === 0 && <p className="dashboard-empty-state">لا توجد حالات بانتظار المراجعة.</p>}
+        </section>
       )}
     </section>
   );

@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { randomUUID } from 'node:crypto';
 
 const CONSENT_TYPES = ['learning_data', 'progress_reports'];
 const CHILD_DATA_POLICY_VERSION = 'harf-child-data-v1';
@@ -36,15 +37,86 @@ export class ChildService {
     return (await this.repository.listChildren(parentUserId)).map(serializeChild);
   }
 
-  async createChild(parentUserId, input) {
-    const child = await this.repository.createChild({
-      parentUserId,
-      displayName: input.displayName,
-      ageBand: input.ageBand ?? null,
-      avatar: input.avatar ?? null,
-      status: 'active'
-    });
+  async listPendingRegistrations(parentUserId) {
+    return (await this.repository.listPendingRegistrations(parentUserId)).map(serializeRegistration);
+  }
+
+  async createChild(parentUserId, input, { pendingRegistration = false } = {}) {
+    const registrationId = pendingRegistration ? input.registrationId ?? randomUUID() : null;
+    if (registrationId) {
+      const existing = await this.repository.findRegistration?.(parentUserId, registrationId);
+      if (existing) return serializeChild(existing);
+    }
+    let child;
+    try {
+      child = await this.repository.createChild({
+        parentUserId,
+        ...(registrationId ? {
+          registrationId,
+          status: 'pending_registration',
+          registrationDraft: {
+            step: 'questionnaire',
+            questionnaireVersion: null,
+            submissionId: null,
+            answers: {}
+          }
+        } : { status: 'active' }),
+        displayName: input.displayName,
+        ageBand: input.ageBand ?? null,
+        avatar: input.avatar ?? null
+      });
+    } catch (error) {
+      if (error?.code !== 11000 || !registrationId) throw error;
+      child = await this.repository.findRegistration?.(parentUserId, registrationId);
+      if (!child) throw error;
+    }
     return serializeChild(child);
+  }
+
+  async saveRegistrationDraft(parentUserId, childId, registrationDraft) {
+    const child = await this.getOwnedChild(parentUserId, childId);
+    if (child.status !== 'pending_registration') {
+      throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'لا يمكن استئناف تسجيل هذا الملف.');
+    }
+    const previousDrafts = [...(child.registrationDraft?.previousDrafts ?? [])];
+    if (child.registrationDraft?.questionnaireVersion
+      && child.registrationDraft.questionnaireVersion !== registrationDraft.questionnaireVersion
+      && child.registrationDraft.submissionId) {
+      previousDrafts.push({
+        questionnaireVersion: child.registrationDraft.questionnaireVersion,
+        submissionId: child.registrationDraft.submissionId,
+        answers: child.registrationDraft.answers ?? {},
+        savedAt: this.now()
+      });
+    }
+    const updated = await this.repository.updateRegistrationDraft(childId, parentUserId, {
+      ...registrationDraft,
+      previousDrafts: previousDrafts.slice(-5)
+    });
+    if (!updated) throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'اكتمل تسجيل هذا الملف أو لم يعد متاحًا.');
+    return serializeRegistration(updated);
+  }
+
+  async completeRegistration(parentUserId, childId) {
+    const child = await this.repository.completeRegistration(childId, parentUserId);
+    if (!child) {
+      const existing = await this.getOwnedChild(parentUserId, childId);
+      if (existing.status === 'active') return serializeChild(existing);
+      throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'لا يمكن إكمال تسجيل هذا الملف.');
+    }
+    return serializeChild(child);
+  }
+
+  async listRegistrationReviews() {
+    const records = await this.repository.listRegistrationReviews?.() ?? [];
+    return records.map((record) => ({
+      childId: String(record._id ?? record.id),
+      displayName: record.displayName,
+      ageBand: record.ageBand ?? null,
+      questionnaireVersion: record.registrationDraft?.questionnaireVersion ?? null,
+      answers: record.registrationDraft?.answers ?? {},
+      updatedAt: record.updatedAt
+    }));
   }
 
   async getOwnedChild(parentUserId, childId) {
@@ -57,10 +129,13 @@ export class ChildService {
   }
 
   async updateChild(parentUserId, childId, updates) {
-    await this.getOwnedChild(parentUserId, childId);
-    const child = await this.repository.updateOwnedChild(childId, parentUserId, updates);
-    if (!child) throw new AppError(404, 'CHILD_NOT_FOUND', 'The child profile was not found.');
-    return serializeChild(child);
+    const child = await this.getOwnedChild(parentUserId, childId);
+    if (child.status === 'pending_registration' && updates.status) {
+      throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'أكمل إعداد مسار التعلّم قبل تفعيل ملف الطفل.');
+    }
+    const updated = await this.repository.updateOwnedChild(childId, parentUserId, updates);
+    if (!updated) throw new AppError(404, 'CHILD_NOT_FOUND', 'The child profile was not found.');
+    return serializeChild(updated);
   }
 
   async listConsents(parentUserId, childId) {
@@ -99,6 +174,14 @@ export class ChildService {
     });
     return serializeConsent(consent);
   }
+}
+
+function serializeRegistration(child) {
+  const record = typeof child.toObject === 'function' ? child.toObject() : child;
+  return {
+    ...serializeChild(record),
+    registrationDraft: record.registrationDraft ?? null
+  };
 }
 
 export { serializeChild };

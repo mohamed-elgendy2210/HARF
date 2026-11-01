@@ -39,6 +39,12 @@ export class GameService {
     return listGames();
   }
 
+  async listGamesByIds(gameIds) {
+    if (this.gameLibraryService) return this.gameLibraryService.getPublicGamesByIds(gameIds);
+    const gamesById = new Map(listGames().map((game) => [game.id, game]));
+    return [...new Set(gameIds)].map((gameId) => gamesById.get(gameId)).filter(Boolean);
+  }
+
   async getGame(gameId) {
     if (this.gameLibraryService) {
       const [game, trialGameIds] = await Promise.all([

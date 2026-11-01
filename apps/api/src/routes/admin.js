@@ -89,6 +89,7 @@ function parseUpload(request, response, next) {
 export function createAdminRouter({
   authService,
   authenticationMiddleware,
+  childService,
   gameLibraryService,
   learningPathService,
   subscriptionService,
@@ -336,6 +337,12 @@ export function createAdminRouter({
   }
 
   if (learningPathService) {
+    if (childService?.listRegistrationReviews) {
+      router.get('/learning-registration-reviews', async (_request, response) => {
+        response.set('Cache-Control', 'private, no-store');
+        response.json({ reviews: await learningPathService.listRegistrationReviews() });
+      });
+    }
     router.get('/learning-path', async (_request, response) => {
       response.json(await learningPathService.getAdminPath());
     });

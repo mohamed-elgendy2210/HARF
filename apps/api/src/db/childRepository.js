@@ -11,7 +11,13 @@ export function createChildRepository() {
       return Child.create(data);
     },
     listChildren(parentUserId) {
-      return Child.find({ parentUserId }).sort({ status: 1, createdAt: -1 });
+      return Child.find({ parentUserId, status: { $in: ['active', 'archived'] } }).sort({ status: 1, createdAt: -1 });
+    },
+    async listPendingRegistrations(parentUserId) {
+      return Child.find({ parentUserId, status: 'pending_registration' }).sort({ createdAt: -1 });
+    },
+    findRegistration(parentUserId, registrationId) {
+      return Child.findOne({ parentUserId, registrationId });
     },
     findOwnedChild(childId, parentUserId) {
       return Child.findOne({ _id: childId, parentUserId });
@@ -22,6 +28,26 @@ export function createChildRepository() {
         { $set: updates },
         { new: true, runValidators: true }
       );
+    },
+    updateRegistrationDraft(childId, parentUserId, registrationDraft) {
+      return Child.findOneAndUpdate(
+        { _id: childId, parentUserId, status: 'pending_registration' },
+        { $set: { registrationDraft } },
+        { new: true, runValidators: true }
+      );
+    },
+    completeRegistration(childId, parentUserId) {
+      return Child.findOneAndUpdate(
+        { _id: childId, parentUserId, status: 'pending_registration' },
+        { $set: { status: 'active' }, $unset: { registrationDraft: 1 } },
+        { new: true, runValidators: true }
+      );
+    },
+    listRegistrationReviews() {
+      return Child.find({
+        status: 'pending_registration',
+        'registrationDraft.step': 'needs_review'
+      }).select('_id parentUserId displayName ageBand createdAt updatedAt registrationDraft').sort({ updatedAt: -1 }).limit(200).lean();
     },
     createConsent(data) {
       return ChildConsent.create(data);

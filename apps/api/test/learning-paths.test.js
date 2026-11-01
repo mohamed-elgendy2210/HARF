@@ -112,6 +112,109 @@ test('recommendation preview rejects stale versions and unrecognized option IDs'
   );
 });
 
+test('required multiple-choice questions reject empty selections for pending child registrations', async () => {
+  const service = createService();
+  service.childService.getOwnedChild = async () => ({ status: 'pending_registration', ageBand: '6-8' });
+  await assert.rejects(
+    service.previewRecommendations('parent-id', 'child-id', {
+      questionnaireVersion: 3,
+      submissionId: '401f6e5c-1d3f-4e56-8f12-89b25ab66703',
+      answers: { 'learning-goals': [] }
+    }),
+    { code: 'LEARNING_QUESTIONNAIRE_INCOMPLETE' }
+  );
+});
+
+test('initial child registration assigns only server recommendations before activating the child', async () => {
+  const assignments = [];
+  const responses = [];
+  const child = { status: 'pending_registration', ageBand: '6-8' };
+  const path = {
+    key: 'listening-path',
+    title: 'مسار الاستماع',
+    description: 'أنشطة الاستماع',
+    status: 'published',
+    activities: [{ gameId: 'published-game', title: 'لعبة منشورة', learningArea: 'الاستماع', description: 'نشاط' }],
+    matchingRules: { skillIds: ['listening'], minimumMatches: 1, assignmentType: 'primary' }
+  };
+  const repository = {
+    async getActiveQuestionnaire() { return questionnaire; },
+    async listPaths() { return [path]; },
+    async listPublishedActivities() { return [{ gameId: 'published-game' }]; },
+    async getTrialGameId() { return { value: 'trial-game' }; },
+    async getQuestionnaireVersion() { return questionnaire; },
+    async getQuestionnaireResponse() { return null; },
+    async saveQuestionnaireResponse(data) { responses.push(data); return data; },
+    async assignPath(data) { assignments.push(data); return data; },
+    async listChildAssignments() { return []; }
+  };
+  const childService = {
+    async getOwnedChild() { return child; },
+    async listConsents() { return [{ consentType: 'learning_data', granted: true }]; },
+    async completeRegistration() { child.status = 'active'; return { id: 'child-id', status: child.status }; }
+  };
+  const service = new LearningPathService({
+    repository,
+    childService,
+    gameRepository: {},
+    subscriptionService: {},
+    authService: null
+  });
+  const result = await service.completeChildRegistration('parent-id', 'child-id', {
+    questionnaireVersion: 3,
+    submissionId: '401f6e5c-1d3f-4e56-8f12-89b25ab66703',
+    answers: { 'learning-goals': ['goal-listening'] },
+    pathKeys: ['listening-path']
+  });
+
+  assert.equal(result.child.status, 'active');
+  assert.deepEqual(assignments.map(({ pathKey, assignmentType }) => ({ pathKey, assignmentType })), [
+    { pathKey: 'listening-path', assignmentType: 'primary' }
+  ]);
+  assert.equal(responses.length, 1);
+});
+
+test('initial registration with no matching path preserves answers and stays pending for review', async () => {
+  const savedDrafts = [];
+  const responses = [];
+  const child = { status: 'pending_registration', ageBand: '6-8' };
+  const repository = {
+    async getActiveQuestionnaire() { return questionnaire; },
+    async listPaths() { return []; },
+    async listPublishedActivities() { return []; },
+    async getTrialGameId() { return { value: 'trial-game' }; },
+    async getQuestionnaireVersion() { return questionnaire; },
+    async getQuestionnaireResponse() { return null; },
+    async saveQuestionnaireResponse(data) { responses.push(data); return data; },
+    async assignPath() { assert.fail('A path must not be assigned when there is no match.'); }
+  };
+  const childService = {
+    async getOwnedChild() { return child; },
+    async listConsents() { return [{ consentType: 'learning_data', granted: true }]; },
+    async saveRegistrationDraft(_parentId, _childId, draft) { savedDrafts.push(draft); return draft; },
+    async completeRegistration() { assert.fail('A child without an initial path must remain pending.'); }
+  };
+  const service = new LearningPathService({
+    repository,
+    childService,
+    gameRepository: {},
+    subscriptionService: {},
+    authService: null
+  });
+  const answers = { 'learning-goals': ['goal-listening'] };
+  const result = await service.completeChildRegistration('parent-id', 'child-id', {
+    questionnaireVersion: 3,
+    submissionId: '401f6e5c-1d3f-4e56-8f12-89b25ab66703',
+    answers,
+    pathKeys: []
+  });
+
+  assert.equal(result.needsReview, true);
+  assert.deepEqual(responses[0].answers, answers);
+  assert.equal(savedDrafts[0].step, 'needs_review');
+  assert.equal(child.status, 'pending_registration');
+});
+
 test('questionnaire submission schema constrains IDs, answer shapes, and retry identifiers', () => {
   assert.equal(questionnaireSubmissionSchema.safeParse({
     questionnaireVersion: 3,
@@ -201,5 +304,36 @@ test('only parent-confirmed recommendations are stored after child ownership and
       submissionId: '501f6e5c-1d3f-4e56-8f12-89b25ab66703'
     }),
     { code: 'LEARNING_CONSENT_REQUIRED' }
+  );
+});
+
+test('activity launches require membership in an assigned path and respect locked activity order', async () => {
+  const service = createService();
+  service.childService.listConsents = async () => [{ consentType: 'learning_data', granted: true }];
+  service.repository.listChildAssignments = async () => [];
+  service.getChildLearningOverview = async () => ({
+    paths: [{
+      key: 'listening-path',
+      status: 'active',
+      activities: [
+        { gameId: 'published-game', status: 'available' },
+        { gameId: 'locked-game', status: 'upcoming' }
+      ]
+    }]
+  });
+
+  await service.assertActivityPlayable('parent-id', 'child-id', 'published-game');
+  await assert.rejects(
+    service.assertActivityPlayable('parent-id', 'child-id', 'unassigned-game'),
+    { code: 'LEARNING_ACTIVITY_UNAVAILABLE' }
+  );
+  await assert.rejects(
+    service.assertActivityPlayable('parent-id', 'child-id', 'locked-game'),
+    { code: 'LEARNING_ACTIVITY_LOCKED' }
+  );
+  service.getChildLearningOverview = async () => ({ paths: [] });
+  await assert.rejects(
+    service.assertActivityPlayable('parent-id', 'child-id', 'unassigned-game'),
+    { code: 'LEARNING_ACTIVITY_UNAVAILABLE' }
   );
 });

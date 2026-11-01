@@ -84,6 +84,22 @@ export function createGameLibraryRepository() {
     listDefinitions() {
       return GameDefinition.find({}).sort({ updatedAt: -1, gameId: 1 }).lean();
     },
+    listPublishedDefinitionsByIds(gameIds) {
+      return GameDefinition.find({
+        gameId: { $in: gameIds },
+        status: 'published',
+        publishedVersion: { $gt: 0 }
+      }).select('gameId publishedVersion').lean();
+    },
+    listVersionsForDefinitions(definitions) {
+      if (!definitions.length) return [];
+      return GameVersion.find({
+        $or: definitions.map(({ gameId, publishedVersion }) => ({
+          gameId,
+          version: publishedVersion
+        }))
+      }).select('gameId version content').lean();
+    },
     findDefinition(gameId) {
       return GameDefinition.findOne({ gameId }).lean();
     },

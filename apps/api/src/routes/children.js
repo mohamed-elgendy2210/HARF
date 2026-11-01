@@ -9,7 +9,9 @@ import { validate } from '../middleware/validate.js';
 import {
   childConsentSchema,
   childIdSchema,
+  childRegistrationDraftSchema,
   createChildSchema,
+  completeChildRegistrationSchema,
   updateChildSchema
 } from '../validation/children.js';
 import { childAttemptsQuerySchema } from '../validation/games.js';
@@ -33,9 +35,18 @@ export function createChildrenRouter({ childService, gameService, learningPathSe
     response.json({ children });
   });
 
+  router.get('/registrations/pending', async (request, response) => {
+    response.set('Cache-Control', 'private, no-store');
+    response.json({
+      registrations: await childService.listPendingRegistrations(request.authenticated.user._id)
+    });
+  });
+
   router.post('/', requireCsrf, validate(createChildSchema), async (request, response) => {
-    const child = await childService.createChild(request.authenticated.user._id, request.body);
-    response.status(201).json({ child });
+    const child = await childService.createChild(request.authenticated.user._id, request.body, {
+      pendingRegistration: true
+    });
+    response.status(201).json({ child, registrationRequired: true });
   });
 
   router.get('/:childId/consents', validate(childIdSchema, 'params'), async (request, response) => {
@@ -72,8 +83,65 @@ export function createChildrenRouter({ childService, gameService, learningPathSe
       );
       response.json({ progress });
     });
+    router.get('/:childId/learning-activities', validate(childIdSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      const progress = await learningPathService.getChildLearningOverview(
+        request.authenticated.user._id,
+        request.params.childId
+      );
+      const paths = progress.paths.filter(({ status }) => status === 'active' || status === 'completed');
+      const activitiesById = new Map();
+      for (const path of paths) {
+        for (const activity of path.activities) {
+          const existing = activitiesById.get(activity.gameId);
+          if (existing) {
+            existing.pathTitles.push(path.title);
+            if (activity.status === 'available') existing.status = 'available';
+            else if (activity.status === 'completed' && existing.status !== 'available') {
+              existing.status = 'completed';
+            }
+          } else {
+            activitiesById.set(activity.gameId, {
+              ...activity,
+              pathTitles: [path.title]
+            });
+          }
+        }
+      }
+      const games = await gameService.listGamesByIds([...activitiesById.keys()]);
+      const gamesById = new Map(games
+        .filter(({ access }) => access !== 'trial')
+        .map((game) => [game.id, game]));
+      const activities = [...activitiesById.values()].flatMap((activity) => {
+        const game = gamesById.get(activity.gameId);
+        return game ? [{ ...game, ...activity, activityStatus: activity.status }] : [];
+      });
+      response.json({
+        paths: paths.map(({ key, title }) => ({ key, title })),
+        activities
+      });
+    });
     router.get('/:childId/learning-questionnaire', validate(childIdSchema, 'params'), async (_request, response) => {
+      await childService.getOwnedChild(_request.authenticated.user._id, _request.params.childId);
       response.json({ questionnaire: await learningPathService.getQuestionnaire() });
+    });
+    router.get('/:childId/learning-questionnaire-response', validate(childIdSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json({
+        response: await learningPathService.getLatestQuestionnaireResponse(
+          request.authenticated.user._id,
+          request.params.childId
+        )
+      });
+    });
+    router.patch('/:childId/registration-draft', requireCsrf, validate(childIdSchema, 'params'), validate(childRegistrationDraftSchema), async (request, response) => {
+      response.json({
+        registration: await learningPathService.saveRegistrationDraft(
+          request.authenticated.user._id,
+          request.params.childId,
+          request.body
+        )
+      });
     });
     router.post('/:childId/learning-recommendations', requireCsrf, validate(childIdSchema, 'params'), validate(questionnaireSubmissionSchema), async (request, response) => {
       const recommendations = await learningPathService.previewRecommendations(
@@ -90,6 +158,13 @@ export function createChildrenRouter({ childService, gameService, learningPathSe
         request.body
       );
       response.status(201).json(result);
+    });
+    router.post('/:childId/complete-registration', requireCsrf, validate(childIdSchema, 'params'), validate(completeChildRegistrationSchema), async (request, response) => {
+      response.json(await learningPathService.completeChildRegistration(
+        request.authenticated.user._id,
+        request.params.childId,
+        request.body
+      ));
     });
   }
 
