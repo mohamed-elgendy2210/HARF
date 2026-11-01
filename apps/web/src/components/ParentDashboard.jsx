@@ -50,6 +50,7 @@ const sections = [
   { id: 'settings', label: 'إعدادات الحساب', icon: '⚙' }
 ];
 const sectionTitles = Object.fromEntries(sections.map(({ id, label }) => [id, label]));
+const APPOINTMENT_DAYS_PER_PAGE = 3;
 
 function avatarFor(value) {
   return avatars.find((avatar) => avatar.value === value)?.emoji ?? '🧒';
@@ -145,6 +146,7 @@ export default function ParentDashboard({
   const [billingPeriod, setBillingPeriod] = useState(() => new URLSearchParams(window.location.search).get('period') === 'annual' ? 'annual' : 'monthly');
   const [specialists, setSpecialists] = useState([]);
   const [selectedSpecialistId, setSelectedSpecialistId] = useState('');
+  const [visibleAppointmentDays, setVisibleAppointmentDays] = useState(APPOINTMENT_DAYS_PER_PAGE);
   const [specialistAvailability, setSpecialistAvailability] = useState(null);
   const [loadingSpecialists, setLoadingSpecialists] = useState(false);
   const [loadingAvailability, setLoadingAvailability] = useState(false);
@@ -993,6 +995,7 @@ export default function ParentDashboard({
         groups[day].push(slot);
         return groups;
       }, {});
+      const orderedSlotDays = Object.entries(slotsByDay).sort(([firstDay], [secondDay]) => firstDay.localeCompare(secondDay));
       return (
         <section className="dashboard-section">
           <div className="dashboard-section-heading">
@@ -1030,7 +1033,10 @@ export default function ParentDashboard({
                         <p>{formatAppointmentPrice(specialist.appointmentPriceMinor, specialist.appointmentCurrency)} · {specialist.appointmentDurationMinutes} دقيقة</p>
                         <button type="button" className="button button--small button--outline"
                           aria-pressed={selectedSpecialistId === specialist.id}
-                          onClick={() => setSelectedSpecialistId((current) => current === specialist.id ? '' : specialist.id)}>
+                          onClick={() => {
+                            setVisibleAppointmentDays(APPOINTMENT_DAYS_PER_PAGE);
+                            setSelectedSpecialistId((current) => current === specialist.id ? '' : specialist.id);
+                          }}>
                           {selectedSpecialistId === specialist.id ? 'إخفاء المواعيد' : 'اختيار الأخصائي وعرض المواعيد'}
                         </button>
                       </>
@@ -1052,30 +1058,41 @@ export default function ParentDashboard({
                   ) : <ProgressNotice>أضف ملف طفل نشطًا قبل طلب موعد.</ProgressNotice>}
                   {loadingAvailability ? <p className="dashboard-loading" role="status">جارٍ تحميل المواعيد المتاحة…</p>
                     : specialistAvailability?.slots?.length ? (
-                      <div className="appointment-day-list">
-                        {Object.entries(slotsByDay).map(([day, daySlots]) => (
-                          <section className="appointment-day-group" key={day}>
-                            <h4>{formatAppointmentDate(daySlots[0].startsAt, daySlots[0].timeZone)}</h4>
-                            <div className="appointment-slot-grid">
-                              {daySlots.map((slot) => (
-                                <article className="appointment-slot" key={slot.startsAt}>
-                                  <strong className="appointment-slot__time">
-                                    <time dateTime={slot.startsAt}>
-                                      من {formatAppointmentTime(slot.startsAt, slot.timeZone)} إلى {formatAppointmentTime(slot.endsAt, slot.timeZone)}
-                                    </time>
-                                  </strong>
-                                  <span>{formatAppointmentPrice(slot.amountMinor, slot.currency)} · {slot.durationMinutes} دقيقة</span>
-                                  <button type="button" className="button button--small button--primary"
-                                    disabled={Boolean(bookingSlotStartsAt) || activeChildren.length === 0}
-                                    onClick={() => bookAppointment(slot)}>
-                                    {bookingSlotStartsAt === slot.startsAt ? 'جارٍ إرسال هذا الطلب…' : 'طلب موعد اختياري'}
-                                  </button>
-                                </article>
-                              ))}
-                            </div>
-                          </section>
-                        ))}
-                      </div>
+                      <>
+                        <div className="appointment-day-list">
+                          {orderedSlotDays.slice(0, visibleAppointmentDays).map(([day, daySlots]) => (
+                            <section className="appointment-day-group" key={day}>
+                              <h4>{formatAppointmentDate(daySlots[0].startsAt, daySlots[0].timeZone)}</h4>
+                              <div className="appointment-slot-grid">
+                                {daySlots.map((slot) => (
+                                  <article className="appointment-slot" key={slot.startsAt}>
+                                    <strong className="appointment-slot__time">
+                                      <time dateTime={slot.startsAt}>
+                                        من {formatAppointmentTime(slot.startsAt, slot.timeZone)} إلى {formatAppointmentTime(slot.endsAt, slot.timeZone)}
+                                      </time>
+                                    </strong>
+                                    <span>{formatAppointmentPrice(slot.amountMinor, slot.currency)} · {slot.durationMinutes} دقيقة</span>
+                                    <button type="button" className="button button--small button--primary"
+                                      disabled={Boolean(bookingSlotStartsAt) || activeChildren.length === 0}
+                                      onClick={() => bookAppointment(slot)}>
+                                      {bookingSlotStartsAt === slot.startsAt ? 'جارٍ إرسال هذا الطلب…' : 'طلب موعد اختياري'}
+                                    </button>
+                                  </article>
+                                ))}
+                              </div>
+                            </section>
+                          ))}
+                        </div>
+                        {orderedSlotDays.length > visibleAppointmentDays && (
+                          <button
+                            type="button"
+                            className="button button--outline"
+                            onClick={() => setVisibleAppointmentDays((count) => count + APPOINTMENT_DAYS_PER_PAGE)}
+                          >
+                            عرض المزيد من المواعيد
+                          </button>
+                        )}
+                      </>
                     ) : <ProgressNotice>لا توجد مواعيد متاحة خلال الأسبوعين القادمين. جرّب لاحقًا.</ProgressNotice>}
                   <p className="dashboard-privacy-note">السعر والمدة يُحفظان كما كانا وقت طلب الموعد. رسوم الموعد منفصلة عن اشتراك الألعاب، ولا تنفذ المنصة تحصيلها.</p>
                 </section>
