@@ -191,7 +191,11 @@ function TrialGames() {
         <div className="trial-games-grid" aria-label="ألعاب تجريبية مجانية">
           {games.map((game) => (
             <article className="game-card game-card--trial" key={game.id}>
-              <span className="game-card__animal" aria-hidden="true">{game.companionAnimal}</span>
+              <span className="game-card__animal" aria-hidden="true">
+                {game.companionAnimalImageUrl
+                  ? <img src={getApiUrl(game.companionAnimalImageUrl)} alt="" />
+                  : game.companionAnimal}
+              </span>
               <span className="game-card__tag">مجانية للزوار</span>
               <h3>{game.title}</h3>
               <p>{game.description}</p>

@@ -168,6 +168,7 @@ test('spatial publishing requires playable image assets and returns safe asset U
     spatial: structuredClone(spatial)
   };
   const imageIds = ['000000000000000000000001', '000000000000000000000002', '000000000000000000000003'];
+  content.companionAnimalImageAssetId = imageIds[0];
   const assets = imageIds.map((id) => ({ id, kind: 'image', active: true, mimeType: 'image/png' }));
   const repository = {
     async findAssetsByIds(ids) { return assets.filter(({ id }) => ids.includes(id)); },
@@ -189,6 +190,7 @@ test('spatial publishing requires playable image assets and returns safe asset U
   const playable = await service.getPlayableGame('spatial-test');
   assert.equal(playable.template, 'spatial-relationships');
   assert.equal(playable.questionCount, 1);
+  assert.equal(playable.companionAnimalImageUrl, `/api/v1/media/${imageIds[0]}`);
   assert.equal(playable.spatial.scene.objects[0].imageUrl, `/api/v1/media/${imageIds[0]}`);
 });
 

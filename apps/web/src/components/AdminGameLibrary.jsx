@@ -22,6 +22,27 @@ const assetKinds = [
   ['video', 'فيديو']
 ];
 
+const companionAnimals = [
+  ['🐢', 'سلحفاة'],
+  ['🐼', 'باندا'],
+  ['🐱', 'قطة'],
+  ['🐶', 'كلب'],
+  ['🦊', 'ثعلب'],
+  ['🐻', 'دب'],
+  ['🐨', 'كوالا'],
+  ['🐰', 'أرنب'],
+  ['🦁', 'أسد'],
+  ['🐯', 'نمر'],
+  ['🐸', 'ضفدع'],
+  ['🐵', 'قرد'],
+  ['🐧', 'بطريق'],
+  ['🦉', 'بومة'],
+  ['🦋', 'فراشة'],
+  ['🐬', 'دلفين'],
+  ['🐳', 'حوت'],
+  ['🦄', 'وحيد القرن']
+];
+
 const formatBytes = (bytes) => {
   if (bytes < 1024) return `${bytes} بايت`;
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} كيلوبايت`;
@@ -79,6 +100,7 @@ function contentPayload(content, questions) {
     description: content.description.trim(),
     companion: content.companion.trim(),
     companionAnimal: content.companionAnimal.trim(),
+    companionAnimalImageAssetId: content.companionAnimalImageAssetId ?? null,
     instructions: content.instructions.trim(),
     assetAssignments: content.assetAssignments
   };
@@ -123,6 +145,7 @@ function emptyContent() {
     description: '',
     companion: '',
     companionAnimal: '🐢',
+    companionAnimalImageAssetId: null,
     instructions: '',
     questions: [{ prompt: 'اختر حرف «م»', options: ['م', 'ب', 'س'], correctAnswerIndex: 0, difficulty: 'beginner' }],
     pairs: [],
@@ -240,6 +263,32 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
       if (assetId) remaining.push({ event, kind, assetId });
       return { ...current, assetAssignments: remaining };
     });
+  };
+
+  const uploadCompanionImage = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    setError('');
+    setNotice('');
+    try {
+      const formData = new FormData();
+      formData.set('displayName', `صورة رفيق ${content.title || selectedGame?.gameId || 'اللعبة'}`);
+      formData.set('kind', 'image');
+      formData.set('altText', `صورة ${content.companion || 'رفيق اللعبة'}`);
+      formData.set('category', 'رفاق الألعاب');
+      formData.set('tags', 'رفيق، حيوان، لعبة');
+      formData.set('file', file);
+      const result = await apiRequest('/api/v1/admin/assets', { method: 'POST', body: formData });
+      setAssets((current) => [result.asset, ...current]);
+      updateContentField('companionAnimalImageAssetId', result.asset.id);
+      setNotice('تم رفع الصورة واختيارها لرفيق اللعبة. احفظ المسودة لنشر التغيير لاحقًا.');
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   const setQuestionMedia = (questionIndex, field, value, optionIndex = null) => {
@@ -698,14 +747,52 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
               <label>وصف موجز
                 <textarea value={content.description} maxLength="240" rows="2" required onChange={(event) => updateContentField('description', event.target.value)} />
               </label>
-              <div className="admin-library__field-row">
-                <label>اسم الرفيق
-                  <input value={content.companion} maxLength="80" required onChange={(event) => updateContentField('companion', event.target.value)} />
+              <label>اسم الرفيق
+                <input value={content.companion} maxLength="80" required onChange={(event) => updateContentField('companion', event.target.value)} />
+              </label>
+              <fieldset className="admin-library__animal-picker">
+                <legend>رمز الحيوان</legend>
+                <p>اختر رمزًا جاهزًا أو ارفع صورة خاصة بهذه اللعبة.</p>
+                <div className="admin-library__animal-options" role="group" aria-label="خيارات رموز الحيوانات">
+                  {companionAnimals.map(([animal, label]) => (
+                    <button
+                      type="button"
+                      className="admin-library__animal-option"
+                      key={animal}
+                      aria-label={label}
+                      aria-pressed={content.companionAnimal === animal && !content.companionAnimalImageAssetId}
+                      onClick={() => setContent((current) => ({
+                        ...current,
+                        companionAnimal: animal,
+                        companionAnimalImageAssetId: null
+                      }))}
+                    >{animal}</button>
+                  ))}
+                </div>
+                <label>أو اختر صورة من مكتبة الوسائط
+                  <select value={content.companionAnimalImageAssetId ?? ''}
+                    onChange={(event) => updateContentField('companionAnimalImageAssetId', event.target.value || null)}>
+                    <option value="">استخدم رمز الحيوان المختار</option>
+                    {assetsOfKind('image', content.companionAnimalImageAssetId).map((asset) => (
+                      <option value={asset.id} key={asset.id}>{assetOptionLabel(asset)}</option>
+                    ))}
+                  </select>
                 </label>
-                <label>رمز الحيوان
-                  <input value={content.companionAnimal} maxLength="12" required onChange={(event) => updateContentField('companionAnimal', event.target.value)} />
+                <label className="admin-library__animal-upload">رفع صورة جديدة للعبة
+                  <input type="file" accept="image/png,image/jpeg,image/webp"
+                    disabled={busy} onChange={(event) => void uploadCompanionImage(event)} />
+                  <small>الصيغ المدعومة: PNG وJPG وWebP. تُضاف الصورة إلى مكتبة الوسائط وتُختار تلقائيًا.</small>
                 </label>
-              </div>
+                {content.companionAnimalImageAssetId && (() => {
+                  const selectedAsset = assets.find((asset) => asset.id === content.companionAnimalImageAssetId);
+                  return selectedAsset ? (
+                    <div className="admin-library__animal-preview">
+                      <AdminAssetPreview asset={selectedAsset} />
+                      <span>{selectedAsset.displayName}</span>
+                    </div>
+                  ) : null;
+                })()}
+              </fieldset>
               <label>التعليمات
                 <textarea value={content.instructions} maxLength="500" rows="2" required onChange={(event) => updateContentField('instructions', event.target.value)} />
               </label>

@@ -8,6 +8,7 @@ function contentAssetIds(content) {
     ...(question.optionImageAssetIds ?? [])
   ].filter(Boolean).map(String));
   return [...new Set([
+    ...(content.companionAnimalImageAssetId ? [String(content.companionAnimalImageAssetId)] : []),
     ...content.assetAssignments.map(({ assetId }) => String(assetId)),
     ...(content.pairs ?? []).map(({ imageAssetId }) => imageAssetId).filter(Boolean).map(String),
     ...questionAssetIds,
@@ -82,6 +83,9 @@ function publicContent(version, assetMap) {
     description: content.description,
     companion: content.companion,
     companionAnimal: content.companionAnimal,
+    companionAnimalImageUrl: content.companionAnimalImageAssetId
+      ? publicAssetUrl(assetMap, content.companionAnimalImageAssetId, 'image')
+      : null,
     instructions: content.instructions,
     version: String(version.version),
     questionCount: content.template === 'spatial-relationships'
@@ -342,12 +346,22 @@ export class GameLibraryService {
     const games = await Promise.all(definitions.map(async (definition) => {
       const version = await this.repository.findVersion(definition.gameId, definition.publishedVersion);
       if (!version) return null;
+      const companionImageAssetId = version.content.companionAnimalImageAssetId;
+      const [companionImageAsset] = companionImageAssetId
+        ? await this.repository.findAssetsByIds([String(companionImageAssetId)])
+        : [];
+      const companionImageAvailable = companionImageAsset?.active
+        && companionImageAsset.kind === 'image'
+        && await this.mediaAssetService.isAvailable(companionImageAsset);
       return {
         id: definition.gameId,
         title: version.content.title,
         description: version.content.description,
         companion: version.content.companion,
         companionAnimal: version.content.companionAnimal,
+        companionAnimalImageUrl: companionImageAvailable
+          ? `/api/v1/media/${String(companionImageAsset._id ?? companionImageAsset.id)}`
+          : null,
         template: version.content.template ?? 'multiple-choice',
         access: trialGameIds.includes(definition.gameId) ? 'trial' : 'parent',
         version: String(definition.publishedVersion),
@@ -395,6 +409,12 @@ export class GameLibraryService {
       }
       if (assignment.kind === 'video' && asset.mimeType !== 'video/mp4') {
         throw new AppError(400, 'ASSET_KIND_MISMATCH', 'Mascot videos must use the verified MP4 format.');
+      }
+    }
+    if (content.companionAnimalImageAssetId) {
+      const asset = byId.get(String(content.companionAnimalImageAssetId));
+      if (!asset || asset.kind !== 'image' || !asset.active) {
+        throw new AppError(400, 'COMPANION_IMAGE_UNAVAILABLE', 'The companion image must refer to an active image asset.');
       }
     }
     for (const pair of content.pairs ?? []) {

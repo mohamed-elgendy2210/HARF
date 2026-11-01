@@ -70,7 +70,7 @@ export function HarfMascot({ expression = 'talking', className = '' }) {
   );
 }
 
-export function GameCompanion({ animal, name, state = 'idle', imageUrl, animationUrl }) {
+export function GameCompanion({ animal, animalImageUrl, name, state = 'idle', imageUrl, animationUrl }) {
   const expression = state === 'welcome' ? 'talking'
     : state === 'correct' || state === 'completion' ? 'happy'
       : state === 'encouragement' ? 'have-Idea'
@@ -83,7 +83,9 @@ export function GameCompanion({ animal, name, state = 'idle', imageUrl, animatio
         {imageUrl
           ? <img className="game-companion__asset" src={getApiUrl(imageUrl)} alt="" />
           : <HarfMascot expression={expression} className="game-companion__mascot" />}
-        <span className="game-companion__animal-emoji" aria-hidden="true">{animal}</span>
+        {animalImageUrl
+          ? <GameImage src={animalImageUrl} alt="" className="game-companion__animal-image game-companion__animal-emoji" />
+          : <span className="game-companion__animal-emoji" aria-hidden="true">{animal}</span>}
       </div>
       <span className="game-companion__copy">
         <strong>{name}</strong>

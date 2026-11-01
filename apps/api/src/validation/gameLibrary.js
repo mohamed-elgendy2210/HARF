@@ -116,6 +116,7 @@ const gameContent = z.object({
   description: z.string().trim().min(1).max(240),
   companion: z.string().trim().min(1).max(80),
   companionAnimal: z.string().trim().min(1).max(12),
+  companionAnimalImageAssetId: mediaAssetId.nullable().optional(),
   instructions: z.string().trim().min(1).max(500),
   questions: z.array(question).max(20).default([]),
   pairs: z.array(picturePair).min(2).max(8).optional(),

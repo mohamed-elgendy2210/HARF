@@ -101,7 +101,11 @@ function GameCatalog({ settings }) {
           <div className="game-catalog" aria-label="الألعاب المتاحة">
             {games.map((game) => (
               <article className={`game-card${game.access === 'trial' ? ' game-card--trial' : ''}`} key={game.id}>
-                <span className="game-card__animal" aria-hidden="true">{game.companionAnimal}</span>
+                <span className="game-card__animal" aria-hidden="true">
+                  {game.companionAnimalImageUrl
+                    ? <GameImage src={game.companionAnimalImageUrl} alt="" className="game-card__animal-image" />
+                    : game.companionAnimal}
+                </span>
                 <span className="game-card__tag">{game.access === 'trial' ? 'مجانية للزوار' : 'لولي الأمر'}</span>
                 <h2>{game.title}</h2>
                 <p>{game.description}</p>
@@ -530,6 +534,7 @@ function GamePlay({ gameId }) {
               <div className={`game-stage${started ? ' game-stage--active' : ' game-stage--welcome'}`}>
                 <GameCompanion
                   animal={game.companionAnimal}
+                  animalImageUrl={game.companionAnimalImageUrl}
                   name={game.companion}
                   state={started ? companionState : 'welcome'}
                   imageUrl={started
