@@ -363,6 +363,15 @@ function createMemoryRepository() {
       async listSubscriptions(parentUserId) {
         return subscriptions.filter((item) => String(item.parentUserId) === String(parentUserId))
           .sort((left, right) => right.startsAt - left.startsAt);
+      },
+      async listActiveSubscriptions(parentUserIds, now) {
+        return subscriptions.filter((item) => parentUserIds.some((parentId) => String(parentId) === String(item.parentUserId))
+          && item.startsAt <= now && item.expiresAt > now)
+          .sort((left, right) => right.expiresAt - left.expiresAt);
+      },
+      async listLatestSubscriptions(parentUserIds) {
+        return subscriptions.filter((item) => parentUserIds.some((parentId) => String(parentId) === String(item.parentUserId)))
+          .sort((left, right) => right.startsAt - left.startsAt);
       }
     },
     paymentRepository: {
@@ -481,6 +490,18 @@ function createMemoryRepository() {
             childId: structuredClone(children.get(String(item.childId))),
             specialistUserId: structuredClone(users.get(String(item.specialistUserId)))
           }));
+      },
+      async findChildRemovalBlocker(parentUserId, childId, now) {
+        return [...appointments.values()].find((item) => (
+          String(item.parentUserId) === String(parentUserId)
+          && String(item.childId) === String(childId)
+          && item.slotReserved
+          && (
+            ['pending', 'awaiting_payment', 'payment_under_review'].includes(item.status)
+            || (item.status === 'accepted' && item.sessionStatus !== 'completed')
+            || ['awaiting_payment', 'pending_verification'].includes(item.payment?.status)
+          )
+        )) ?? null;
       },
       async listSpecialistAppointments(specialistUserId) {
         return [...appointments.values()].filter((item) => String(item.specialistUserId) === String(specialistUserId))
@@ -697,6 +718,20 @@ function createMemoryRepository() {
     async findUserByEmail(email) {
       return [...users.values()].find((user) => user.email === email) ?? null;
     },
+    async listParentAccounts() {
+      return [...users.values()].filter((user) => user.role === 'parent');
+    },
+    async acquireChildManagementLock(userId, token, expiresAt, now) {
+      const user = users.get(String(userId));
+      if (!user || user.role !== 'parent'
+        || (user.childManagementLock?.expiresAt && user.childManagementLock.expiresAt > now)) return null;
+      user.childManagementLock = { token, expiresAt };
+      return { _id: user._id };
+    },
+    async releaseChildManagementLock(userId, token) {
+      const user = users.get(String(userId));
+      if (user?.childManagementLock?.token === token) delete user.childManagementLock;
+    },
     async listActiveAdministrators() {
       return [...users.values()].filter((user) => user.role === 'admin'
         && user.accountStatus === 'active' && user.emailVerifiedAt);
@@ -843,6 +878,26 @@ function createMemoryRepository() {
           && ['active', 'archived'].includes(child.status))
         .sort((left, right) => right.createdAt - left.createdAt);
     },
+    async countChildren(parentUserId) {
+      const ownedChildren = [...children.values()].filter((child) => String(child.parentUserId) === String(parentUserId));
+      return {
+        active: ownedChildren.filter((child) => ['active', undefined].includes(child.status)).length,
+        archived: ownedChildren.filter((child) => child.status === 'archived').length,
+        pending: ownedChildren.filter((child) => child.status === 'pending_registration').length
+      };
+    },
+    async listParentChildCounts(parentIds) {
+      return parentIds.map((parentId) => ({
+        _id: parentId,
+        ...[...children.values()].filter((child) => String(child.parentUserId) === String(parentId))
+          .reduce((counts, child) => {
+            if (['active', undefined].includes(child.status)) counts.active += 1;
+            else if (child.status === 'archived') counts.archived += 1;
+            else if (child.status === 'pending_registration') counts.pending += 1;
+            return counts;
+          }, { active: 0, archived: 0, pending: 0 })
+      }));
+    },
     async listPendingRegistrations(parentUserId) {
       return [...children.values()]
         .filter((child) => String(child.parentUserId) === String(parentUserId)
@@ -863,6 +918,13 @@ function createMemoryRepository() {
       const child = await this.findOwnedChild(childId, parentUserId);
       if (!child) return null;
       Object.assign(child, updates, { updatedAt: new Date() });
+      return child;
+    },
+    async archiveOwnedChild(childId, parentUserId) {
+      const child = await this.findOwnedChild(childId, parentUserId);
+      if (!child || !['active', undefined].includes(child.status)) return null;
+      child.status = 'archived';
+      child.updatedAt = new Date();
       return child;
     },
     async updateRegistrationDraft(childId, parentUserId, registrationDraft) {
@@ -1319,6 +1381,7 @@ before(async () => {
     repository: repository.subscriptionRepository,
     paymentRepository: repository.paymentRepository,
     authRepository: repository,
+    childRepository: repository,
     notificationService,
     logger,
     receiptService
@@ -2099,6 +2162,7 @@ test('pending users cannot access admin APIs and cannot forge session CSRF state
 test('parent child profiles and consent history are isolated by owner and protected account state', async () => {
   const parent = await createApprovedParent('family-one@harf.test');
   const otherParent = await createApprovedParent('family-two@harf.test');
+  await grantActiveSubscription(parent.user._id);
 
   const missingCsrf = await request('/children', {
     method: 'POST',
@@ -2247,20 +2311,42 @@ test('parent child profiles and consent history are isolated by owner and protec
   });
   assert.equal(siblingConsentWrite.status, 404);
 
-  const updated = await request(`/children/${child.id}`, {
+  const directArchive = await request(`/children/${child.id}`, {
     method: 'PATCH',
     cookie: parent.cookie,
     csrfToken: parent.csrfToken,
     body: { displayName: 'سوسو', status: 'archived' }
   });
-  assert.equal((await updated.json()).child.status, 'archived');
+  assert.equal(directArchive.status, 400);
+  assert.equal(repository.children.get(child.id).status, 'active');
+  const removed = await request(`/children/${child.id}`, {
+    method: 'DELETE',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken
+  });
+  assert.equal(removed.status, 200);
+  assert.equal((await removed.json()).child.status, 'archived');
+  assert.equal(repository.childConsents.length, 2);
+  const allowance = await request('/children/allowance', { cookie: parent.cookie });
+  assert.deepEqual((await allowance.json()).allowance, {
+    subscriptionStatus: 'active',
+    period: 'monthly',
+    maximum: 2,
+    active: 0,
+    archived: 1,
+    pendingRegistration: 0,
+    available: 2,
+    canAddChild: true,
+    overLimit: false
+  });
   const reactivated = await request(`/children/${child.id}`, {
     method: 'PATCH',
     cookie: parent.cookie,
     csrfToken: parent.csrfToken,
     body: { status: 'active' }
   });
-  assert.equal((await reactivated.json()).child.status, 'active');
+  assert.equal(reactivated.status, 403);
+  assert.equal(repository.children.get(child.id).status, 'archived');
 
   const pending = await registerAccount('parent', 'pending-family@harf.test');
   assert.equal((await request('/children', { cookie: cookieFrom(pending) })).status, 403);
@@ -2273,6 +2359,99 @@ test('parent child profiles and consent history are isolated by owner and protec
     cookie: `harf.sid=${adminSession.rawToken}`
   })).status, 403);
   assert.equal((await request('/children/invalid-id', { cookie: parent.cookie })).status, 400);
+});
+
+test('active child profiles respect subscription limits and archived profiles retain their history', async () => {
+  const parent = await createApprovedParent('child-limit-family@harf.test');
+  await grantActiveSubscription(parent.user._id);
+
+  const withoutSubscription = await createApprovedParent('no-subscription-family@harf.test');
+  const noSubscriptionCreate = await request('/children', {
+    method: 'POST',
+    cookie: withoutSubscription.cookie,
+    csrfToken: withoutSubscription.csrfToken,
+    body: { displayName: 'غير مسموح' }
+  });
+  assert.equal(noSubscriptionCreate.status, 403);
+
+  const children = [];
+  for (const displayName of ['طفل أول', 'طفل ثان']) {
+    const response = await request('/children', {
+      method: 'POST',
+      cookie: parent.cookie,
+      csrfToken: parent.csrfToken,
+      body: { displayName }
+    });
+    assert.equal(response.status, 201);
+    const { child } = await response.json();
+    children.push(child);
+    await childService.completeRegistration(parent.user._id, child.id);
+  }
+
+  const overLimit = await request('/children', {
+    method: 'POST',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: { displayName: 'طفل ثالث' }
+  });
+  assert.equal(overLimit.status, 409);
+  assert.equal((await overLimit.json()).error.code, 'CHILD_LIMIT_REACHED');
+
+  const blockedAllowance = (await (await request('/children/allowance', { cookie: parent.cookie })).json()).allowance;
+  assert.equal(blockedAllowance.active, 2);
+  assert.equal(blockedAllowance.available, 0);
+  assert.equal(blockedAllowance.canAddChild, false);
+
+  const blockerId = `pending-removal-${children[0].id}`;
+  const future = new Date(Date.now() + 60 * 60 * 1000);
+  repository.appointments.set(blockerId, {
+    _id: blockerId,
+    parentUserId: parent.user._id,
+    childId: children[0].id,
+    status: 'awaiting_payment',
+    slotReserved: true,
+    expiresAt: future,
+    payment: { status: 'awaiting_payment', deadline: future }
+  });
+  const blockedRemoval = await request(`/children/${children[0].id}`, {
+    method: 'DELETE',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken
+  });
+  assert.equal(blockedRemoval.status, 409);
+  assert.equal((await blockedRemoval.json()).error.code, 'CHILD_HAS_PENDING_PAYMENT');
+  repository.appointments.delete(blockerId);
+
+  const removed = await request(`/children/${children[0].id}`, {
+    method: 'DELETE',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken
+  });
+  assert.equal(removed.status, 200);
+  assert.equal(repository.children.get(children[0].id).status, 'archived');
+  const adminSession = await authService.createSession(admin);
+  const usageResponse = await request('/admin/subscription/child-usage', {
+    cookie: `harf.sid=${adminSession.rawToken}`
+  });
+  assert.equal(usageResponse.status, 200);
+  const parentUsage = (await usageResponse.json()).parents
+    .find((item) => item.parentId === parent.user._id);
+  assert.equal(parentUsage.active, 1);
+  assert.equal(parentUsage.archived, 1);
+  assert.equal(parentUsage.available, 1);
+
+  const replacement = await request('/children', {
+    method: 'POST',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: { displayName: 'طفل بديل' }
+  });
+  assert.equal(replacement.status, 201);
+  const replacementChild = (await replacement.json()).child;
+  assert.equal(replacementChild.status, 'pending_registration');
+  assert.equal([...repository.children.values()]
+    .filter((child) => String(child.parentUserId) === String(parent.user._id)
+      && child.status === 'archived').length, 1);
 });
 
 test('games provide an anonymous trial and persist parent-owned child results only with consent', async () => {
@@ -2564,6 +2743,9 @@ test('annual subscription payments snapshot their price and grant twelve calenda
     }
   });
   assert.equal(monthlyOnly.status, 200);
+  const defaultLimits = (await monthlyOnly.json()).settings;
+  assert.equal(defaultLimits.monthlyChildLimit, 2);
+  assert.equal(defaultLimits.annualChildLimit, 4);
   const unavailableAnnual = await submitPayment({
     cookie: parent.cookie,
     csrfToken: parent.csrfToken,
@@ -2579,15 +2761,22 @@ test('annual subscription payments snapshot their price and grant twelve calenda
     body: {
       amountMinor: 12500,
       annualAmountMinor: 120000,
+      monthlyChildLimit: 3,
+      annualChildLimit: 5,
       currency: 'EGP',
       vodafoneCash: { enabled: true, recipient: '01000000000', instructions: 'حوّل المبلغ إلى الرقم.' },
       instaPay: { enabled: false, recipient: '', instructions: '' }
     }
   });
   assert.equal(configured.status, 200);
+  const configuredLimits = (await configured.json()).settings;
+  assert.equal(configuredLimits.monthlyChildLimit, 3);
+  assert.equal(configuredLimits.annualChildLimit, 5);
   const plan = (await (await request('/payments/plan')).json()).plan;
   assert.equal(plan.amountMinor, 12500);
   assert.equal(plan.annualAmountMinor, 120000);
+  assert.equal(plan.monthlyChildLimit, 3);
+  assert.equal(plan.annualChildLimit, 5);
 
   const submitted = await submitPayment({
     cookie: parent.cookie,

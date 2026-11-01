@@ -461,31 +461,37 @@ export class LearningPathService {
   }
 
   async completeChildRegistration(parentUserId, childId, input) {
-    const child = await this.childService.getOwnedChild(parentUserId, childId);
-    if (child.status !== 'pending_registration') {
-      if (child.status === 'active') return { child: await this.childService.completeRegistration(parentUserId, childId), alreadyCompleted: true };
-      throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'لا يمكن إكمال تسجيل هذا الملف.');
-    }
-    const preview = await this.previewRecommendations(parentUserId, childId, input);
-    if (!preview.recommendations.length) {
-      await this.confirmPathAssignments(parentUserId, childId, { ...input, pathKeys: [] });
-      await this.childService.saveRegistrationDraft(parentUserId, childId, {
-        step: 'needs_review',
-        questionnaireVersion: input.questionnaireVersion,
-        submissionId: input.submissionId,
-        answers: input.answers
-      });
-      return { child: null, assignments: [], needsReview: true };
-    }
-    if (!input.pathKeys.length) {
-      throw new AppError(400, 'LEARNING_ASSIGNMENT_REQUIRED', 'اختر مسارًا تعليميًا واحدًا على الأقل للمتابعة.');
-    }
-    const result = await this.confirmPathAssignments(parentUserId, childId, input);
-    if (!result.assignments.length) {
-      throw new AppError(409, 'LEARNING_ASSIGNMENT_REQUIRED', 'يجب تعيين مسار تعليمي قبل إكمال تسجيل الطفل.');
-    }
-    const activeChild = await this.childService.completeRegistration(parentUserId, childId);
-    return { child: activeChild, assignments: result.assignments, needsReview: false };
+    return this.subscriptionService.withChildManagementLock(parentUserId, async () => {
+      const child = await this.childService.getOwnedChild(parentUserId, childId);
+      if (child.status !== 'pending_registration') {
+        if (child.status === 'active') return {
+          child: await this.childService.completeRegistration(parentUserId, childId),
+          alreadyCompleted: true
+        };
+        throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'لا يمكن إكمال تسجيل هذا الملف.');
+      }
+      await this.subscriptionService.requireChildSlot(parentUserId);
+      const preview = await this.previewRecommendations(parentUserId, childId, input);
+      if (!preview.recommendations.length) {
+        await this.confirmPathAssignments(parentUserId, childId, { ...input, pathKeys: [] });
+        await this.childService.saveRegistrationDraft(parentUserId, childId, {
+          step: 'needs_review',
+          questionnaireVersion: input.questionnaireVersion,
+          submissionId: input.submissionId,
+          answers: input.answers
+        });
+        return { child: null, assignments: [], needsReview: true };
+      }
+      if (!input.pathKeys.length) {
+        throw new AppError(400, 'LEARNING_ASSIGNMENT_REQUIRED', 'اختر مسارًا تعليميًا واحدًا على الأقل للمتابعة.');
+      }
+      const result = await this.confirmPathAssignments(parentUserId, childId, input);
+      if (!result.assignments.length) {
+        throw new AppError(409, 'LEARNING_ASSIGNMENT_REQUIRED', 'يجب تعيين مسار تعليمي قبل إكمال تسجيل الطفل.');
+      }
+      const activeChild = await this.childService.completeRegistration(parentUserId, childId);
+      return { child: activeChild, assignments: result.assignments, needsReview: false };
+    });
   }
 
   async getChildLearningOverview(parentUserId, childId) {

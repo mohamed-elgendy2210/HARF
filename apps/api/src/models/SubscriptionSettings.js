@@ -10,6 +10,8 @@ const subscriptionSettingsSchema = new mongoose.Schema({
   key: { type: String, required: true, unique: true, enum: ['monthly'] },
   amountMinor: { type: Number, required: true, min: 1, max: 100000000 },
   annualAmountMinor: { type: Number, min: 1, max: 100000000, default: null },
+  monthlyChildLimit: { type: Number, min: 0, max: 100, default: 2 },
+  annualChildLimit: { type: Number, min: 0, max: 100, default: 4 },
   currency: { type: String, required: true, enum: ['EGP'], default: 'EGP' },
   vodafoneCash: { type: paymentMethodSchema, required: true },
   instaPay: { type: paymentMethodSchema, required: true },

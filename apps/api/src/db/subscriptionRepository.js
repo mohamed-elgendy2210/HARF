@@ -25,6 +25,17 @@ export function createSubscriptionRepository() {
     findLatestUnexpiredSubscription(parentUserId, now) {
       return Subscription.findOne({ parentUserId, expiresAt: { $gt: now } })
         .sort({ expiresAt: -1, createdAt: -1 }).lean();
+    },
+    listActiveSubscriptions(parentUserIds, now) {
+      return Subscription.find({
+        parentUserId: { $in: parentUserIds },
+        startsAt: { $lte: now },
+        expiresAt: { $gt: now }
+      }).sort({ expiresAt: -1, createdAt: -1 }).lean();
+    },
+    listLatestSubscriptions(parentUserIds) {
+      return Subscription.find({ parentUserId: { $in: parentUserIds } })
+        .sort({ startsAt: -1, createdAt: -1 }).lean();
     }
   };
 }

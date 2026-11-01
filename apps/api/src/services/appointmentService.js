@@ -452,6 +452,20 @@ export class AppointmentService {
     }
   }
 
+  async assertChildCanBeRemoved(parentUserId, childId) {
+    await this.repository.expirePending(this.now());
+    const blocker = await this.repository.findChildRemovalBlocker(parentUserId, childId, this.now());
+    if (!blocker) return;
+    if (blocker.status === 'accepted') {
+      throw new AppError(409, 'CHILD_HAS_CONFIRMED_SESSION', 'لا يمكن إزالة ملف الطفل حاليًا لوجود جلسة مؤكدة لم تكتمل. يرجى إنهاء الجلسة أولًا.');
+    }
+    if (blocker.payment?.status === 'pending_verification'
+      || ['awaiting_payment', 'payment_under_review'].includes(blocker.status)) {
+      throw new AppError(409, 'CHILD_HAS_PENDING_PAYMENT', 'لا يمكن إزالة ملف الطفل لوجود دفعة جلسة معلّقة. يرجى إنهاء مراجعة الدفع أولًا.');
+    }
+    throw new AppError(409, 'CHILD_HAS_PENDING_SESSION', 'لا يمكن إزالة ملف الطفل لوجود طلب جلسة معلّق. يرجى معالجة الطلب أولًا.');
+  }
+
   async getAppointment(user, appointmentId) {
     await this.repository.expirePending(this.now(), user.role === 'specialist' ? idOf(user) : undefined);
     const field = user.role === 'parent' ? 'parentUserId' : 'specialistUserId';

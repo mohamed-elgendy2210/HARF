@@ -32,6 +32,10 @@ const userSchema = new mongoose.Schema({
   emailVerifiedAt: { type: Date, default: null },
   approvalStatus: { type: String, enum: ['pending', 'approved', 'rejected'], required: true },
   accountStatus: { type: String, enum: ['active', 'suspended'], default: 'active', required: true },
+  childManagementLock: {
+    token: { type: String, trim: true, maxlength: 60 },
+    expiresAt: { type: Date }
+  },
   parentProfile: { type: parentProfileSchema, default: undefined },
   adminProfile: { type: administratorProfileSchema, default: undefined },
   professionalProfile: { type: professionalProfileSchema, default: undefined }

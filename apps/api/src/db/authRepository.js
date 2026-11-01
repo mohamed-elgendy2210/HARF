@@ -43,6 +43,32 @@ export function createAuthRepository() {
     findUserById(id) {
       return User.findById(id);
     },
+    listParentAccounts() {
+      return User.find({ role: 'parent' })
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .select('_id email accountStatus approvalStatus parentProfile createdAt')
+        .lean();
+    },
+    acquireChildManagementLock(userId, token, expiresAt, now) {
+      return User.findOneAndUpdate({
+        _id: userId,
+        role: 'parent',
+        $or: [
+          { 'childManagementLock.expiresAt': { $exists: false } },
+          { 'childManagementLock.expiresAt': null },
+          { 'childManagementLock.expiresAt': { $lte: now } }
+        ]
+      }, {
+        $set: { childManagementLock: { token, expiresAt } }
+      }, { new: true }).select('_id').lean();
+    },
+    releaseChildManagementLock(userId, token) {
+      return User.updateOne({
+        _id: userId,
+        'childManagementLock.token': token
+      }, { $unset: { childManagementLock: 1 } });
+    },
     findAdministrator() {
       return User.findOne({ role: 'admin', accountStatus: 'active', emailVerifiedAt: { $ne: null } })
         .select('_id email');

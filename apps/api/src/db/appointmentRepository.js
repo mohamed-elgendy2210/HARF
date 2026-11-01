@@ -83,6 +83,23 @@ export function createAppointmentRepository() {
         .populate({ path: 'specialistUserId', select: 'professionalProfile.displayName professionalProfile.specialty professionalProfile.profilePhoto' })
         .sort({ startsAt: -1, _id: -1 }).limit(100).lean();
     },
+    findChildRemovalBlocker(parentUserId, childId, now) {
+      return Appointment.findOne({
+        parentUserId,
+        childId,
+        slotReserved: true,
+        $or: [
+          { status: { $in: ['pending', 'awaiting_payment', 'payment_under_review'] } },
+          {
+            status: 'accepted',
+            sessionStatus: { $ne: 'completed' }
+          },
+          {
+            'payment.status': { $in: ['awaiting_payment', 'pending_verification'] }
+          }
+        ]
+      }).select('_id status startsAt payment.status').lean();
+    },
     listSpecialistAppointments(specialistUserId) {
       return Appointment.find({ specialistUserId })
         .populate({ path: 'childId', select: 'displayName' })

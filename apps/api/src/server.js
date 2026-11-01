@@ -64,7 +64,8 @@ async function start() {
     storageDirectory: path.join(config.mediaStorageDir, 'specialist-verification')
   });
   await specialistDocumentService.initialize();
-  const childService = new ChildService({ repository: createChildRepository() });
+  const childRepository = createChildRepository();
+  const childService = new ChildService({ repository: childRepository });
   const emailService = createEmailService(config.smtp);
   const notificationService = new NotificationService({
     repository: createNotificationRepository(),
@@ -127,6 +128,7 @@ async function start() {
     repository: createSubscriptionRepository(),
     paymentRepository,
     authRepository: repository,
+    childRepository,
     notificationService,
     logger,
     receiptService: new PaymentReceiptService({

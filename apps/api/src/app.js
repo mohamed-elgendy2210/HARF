@@ -179,7 +179,8 @@ export function createApp({
       app.use(`${API_PREFIX}/appointments`, databaseMiddleware);
       app.use(`${API_PREFIX}/appointments`, createAppointmentsRouter({
         authenticationMiddleware,
-        appointmentService
+        appointmentService,
+        subscriptionService
       }));
     }
     if (sessionPaymentService) {
@@ -194,6 +195,8 @@ export function createApp({
         childService,
         gameService,
         learningPathService,
+        subscriptionService,
+        appointmentService,
         authenticationMiddleware
       }));
     }

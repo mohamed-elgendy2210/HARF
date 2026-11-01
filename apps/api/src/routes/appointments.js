@@ -35,7 +35,7 @@ const videoAccessLimiter = rateLimit({
   }
 });
 
-export function createAppointmentsRouter({ authenticationMiddleware, appointmentService }) {
+export function createAppointmentsRouter({ authenticationMiddleware, appointmentService, subscriptionService }) {
   const router = Router();
   router.use(
     authenticationMiddleware,
@@ -49,9 +49,9 @@ export function createAppointmentsRouter({ authenticationMiddleware, appointment
   });
 
   router.post('/', requireRole('parent'), requireCsrf, appointmentRequestLimiter, validate(createAppointmentSchema), async (request, response) => {
-    const appointment = await appointmentService.createAppointment(
-      request.authenticated.user,
-      request.body
+    const appointment = await subscriptionService.withChildManagementLock(
+      request.authenticated.user._id,
+      () => appointmentService.createAppointment(request.authenticated.user, request.body)
     );
     response.status(201).json({ appointment });
   });

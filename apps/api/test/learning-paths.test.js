@@ -157,7 +157,10 @@ test('initial child registration assigns only server recommendations before acti
     repository,
     childService,
     gameRepository: {},
-    subscriptionService: {},
+    subscriptionService: {
+      async withChildManagementLock(_parentId, operation) { return operation(); },
+      async requireChildSlot() {}
+    },
     authService: null
   });
   const result = await service.completeChildRegistration('parent-id', 'child-id', {
@@ -198,7 +201,10 @@ test('initial registration with no matching path preserves answers and stays pen
     repository,
     childService,
     gameRepository: {},
-    subscriptionService: {},
+    subscriptionService: {
+      async withChildManagementLock(_parentId, operation) { return operation(); },
+      async requireChildSlot() {}
+    },
     authService: null
   });
   const answers = { 'learning-goals': ['goal-listening'] };

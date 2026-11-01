@@ -11,7 +11,7 @@ function serializeChild(child) {
     displayName: record.displayName,
     ageBand: record.ageBand ?? null,
     avatar: record.avatar ?? null,
-    status: record.status,
+    status: record.status ?? 'active',
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   };
@@ -130,12 +130,35 @@ export class ChildService {
 
   async updateChild(parentUserId, childId, updates) {
     const child = await this.getOwnedChild(parentUserId, childId);
+    if (updates.status) {
+      if (updates.status === 'active' && child.status === 'archived') {
+        throw new AppError(403, 'CHILD_RESTORATION_ADMIN_ONLY', 'إعادة تفعيل ملف مؤرشف تتطلب مراجعة المسؤول.');
+      }
+      if (updates.status === 'archived') {
+        throw new AppError(400, 'CHILD_ARCHIVE_ENDPOINT_REQUIRED', 'استخدم إجراء إزالة الطفل المخصص.');
+      }
+    }
     if (child.status === 'pending_registration' && updates.status) {
       throw new AppError(409, 'CHILD_REGISTRATION_NOT_PENDING', 'أكمل إعداد مسار التعلّم قبل تفعيل ملف الطفل.');
     }
     const updated = await this.repository.updateOwnedChild(childId, parentUserId, updates);
     if (!updated) throw new AppError(404, 'CHILD_NOT_FOUND', 'The child profile was not found.');
     return serializeChild(updated);
+  }
+
+  async archiveChild(parentUserId, childId) {
+    const child = await this.getOwnedChild(parentUserId, childId);
+    if (child.status === 'archived') return serializeChild(child);
+    if (child.status !== 'active') {
+      throw new AppError(409, 'CHILD_PROFILE_INACTIVE', 'لا يمكن إزالة ملف لم يكتمل تسجيله أو ليس نشطًا.');
+    }
+    const archived = await this.repository.archiveOwnedChild(childId, parentUserId);
+    if (!archived) {
+      const current = await this.getOwnedChild(parentUserId, childId);
+      if (current.status === 'archived') return serializeChild(current);
+      throw new AppError(409, 'CHILD_PROFILE_INACTIVE', 'تعذر إزالة الملف لأنه لم يعد نشطًا.');
+    }
+    return serializeChild(archived);
   }
 
   async listConsents(parentUserId, childId) {

@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { randomUUID } from 'node:crypto';
 
 const METHOD_NAMES = Object.freeze({
   vodafone_cash: 'Vodafone Cash',
@@ -79,10 +80,11 @@ function addCalendarMonths(date, months) {
 }
 
 export class SubscriptionService {
-  constructor({ repository, paymentRepository, authRepository, receiptService, notificationService, logger, now = () => new Date() }) {
+  constructor({ repository, paymentRepository, authRepository, childRepository, receiptService, notificationService, logger, now = () => new Date() }) {
     this.repository = repository;
     this.paymentRepository = paymentRepository;
     this.authRepository = authRepository;
+    this.childRepository = childRepository;
     this.receiptService = receiptService;
     this.notificationService = notificationService;
     this.logger = logger;
@@ -121,6 +123,66 @@ export class SubscriptionService {
     return status;
   }
 
+  async getChildAllowance(parentUserId) {
+    const [subscription, settings, counts] = await Promise.all([
+      this.getStatus(parentUserId),
+      this.paymentRepository.getSettings(),
+      this.childRepository.countChildren(parentUserId)
+    ]);
+    const configuredLimit = subscription.period === 'annual'
+      ? settings?.annualChildLimit ?? 4
+      : settings?.monthlyChildLimit ?? 2;
+    const activeSubscription = subscription.status === 'active';
+    const maximum = activeSubscription ? configuredLimit : 0;
+    return {
+      subscriptionStatus: subscription.status,
+      period: subscription.period ?? null,
+      maximum,
+      active: counts.active,
+      archived: counts.archived,
+      pendingRegistration: counts.pending,
+      available: Math.max(0, maximum - counts.active),
+      canAddChild: activeSubscription && counts.active < configuredLimit,
+      overLimit: activeSubscription && counts.active > configuredLimit
+    };
+  }
+
+  async withChildManagementLock(parentUserId, operation) {
+    const token = randomUUID();
+    const now = this.now();
+    const acquired = await this.authRepository.acquireChildManagementLock(
+      parentUserId,
+      token,
+      new Date(now.getTime() + 60_000),
+      now
+    );
+    if (!acquired) {
+      throw new AppError(409, 'CHILD_MANAGEMENT_BUSY', 'يجري تحديث ملفات الأطفال الآن. يرجى المحاولة مرة أخرى بعد لحظات.');
+    }
+    try {
+      return await operation();
+    } finally {
+      await this.authRepository.releaseChildManagementLock(parentUserId, token);
+    }
+  }
+
+  async requireChildSlot(parentUserId) {
+    const [subscription, settings, counts] = await Promise.all([
+      this.getStatus(parentUserId),
+      this.paymentRepository.getSettings(),
+      this.childRepository.countChildren(parentUserId)
+    ]);
+    if (subscription.status !== 'active') {
+      throw new AppError(403, 'SUBSCRIPTION_REQUIRED', 'يلزم اشتراك نشط لإضافة ملف طفل.');
+    }
+    const maximum = subscription.period === 'annual'
+      ? settings?.annualChildLimit ?? 4
+      : settings?.monthlyChildLimit ?? 2;
+    if (counts.active >= maximum) {
+      throw new AppError(409, 'CHILD_LIMIT_REACHED', `وصلت إلى الحد الأقصى لعدد الأطفال في اشتراكك (${maximum}). أزل ملفًا نشطًا لإضافة طفل آخر.`);
+    }
+  }
+
   async getPublicPlan() {
     const settings = await this.paymentRepository.getSettings();
     if (!settings) {
@@ -128,6 +190,8 @@ export class SubscriptionService {
         configured: false,
         amountMinor: null,
         annualAmountMinor: null,
+        monthlyChildLimit: 2,
+        annualChildLimit: 4,
         currency: 'EGP',
         methods: { vodafone_cash: { enabled: false }, instapay: { enabled: false } }
       };
@@ -136,6 +200,8 @@ export class SubscriptionService {
       configured: true,
       amountMinor: settings.amountMinor,
       annualAmountMinor: settings.annualAmountMinor ?? null,
+      monthlyChildLimit: settings.monthlyChildLimit ?? 2,
+      annualChildLimit: settings.annualChildLimit ?? 4,
       currency: settings.currency,
       methods: {
         vodafone_cash: {
@@ -157,6 +223,8 @@ export class SubscriptionService {
     return settings ? {
       amountMinor: settings.amountMinor,
       annualAmountMinor: settings.annualAmountMinor ?? null,
+      monthlyChildLimit: settings.monthlyChildLimit ?? 2,
+      annualChildLimit: settings.annualChildLimit ?? 4,
       currency: settings.currency,
       vodafoneCash: settings.vodafoneCash,
       instaPay: settings.instaPay,
@@ -164,6 +232,8 @@ export class SubscriptionService {
     } : {
       amountMinor: null,
       annualAmountMinor: null,
+      monthlyChildLimit: 2,
+      annualChildLimit: 4,
       currency: 'EGP',
       vodafoneCash: { enabled: false, recipient: '', instructions: '' },
       instaPay: { enabled: false, recipient: '', instructions: '' },
@@ -172,22 +242,78 @@ export class SubscriptionService {
   }
 
   async updateSettings(actor, input) {
-    const settings = await this.paymentRepository.updateSettings(input, accountId(actor));
+    const current = await this.paymentRepository.getSettings();
+    const settings = await this.paymentRepository.updateSettings({
+      ...input,
+      monthlyChildLimit: input.monthlyChildLimit ?? current?.monthlyChildLimit ?? 2,
+      annualChildLimit: input.annualChildLimit ?? current?.annualChildLimit ?? 4
+    }, accountId(actor));
     await this.audit('admin.subscription_settings_updated', accountId(actor), null, {
       amountMinor: input.amountMinor,
       annualAmountMinor: input.annualAmountMinor ?? null,
       currency: input.currency,
+      monthlyChildLimit: input.monthlyChildLimit ?? current?.monthlyChildLimit ?? 2,
+      annualChildLimit: input.annualChildLimit ?? current?.annualChildLimit ?? 4,
       vodafoneCashEnabled: input.vodafoneCash.enabled,
       instaPayEnabled: input.instaPay.enabled
     });
     return {
       amountMinor: settings.amountMinor,
       annualAmountMinor: settings.annualAmountMinor ?? null,
+      monthlyChildLimit: settings.monthlyChildLimit ?? 2,
+      annualChildLimit: settings.annualChildLimit ?? 4,
       currency: settings.currency,
       vodafoneCash: settings.vodafoneCash,
       instaPay: settings.instaPay,
       updatedAt: settings.updatedAt
     };
+  }
+
+  async listParentChildUsage() {
+    const parents = await this.authRepository.listParentAccounts();
+    if (!parents.length) return [];
+    const parentIds = parents.map(({ _id }) => _id);
+    const now = this.now();
+    const [counts, activeSubscriptions, latestSubscriptions, settings] = await Promise.all([
+      this.childRepository.listParentChildCounts(parentIds),
+      this.repository.listActiveSubscriptions(parentIds, now),
+      this.repository.listLatestSubscriptions(parentIds),
+      this.paymentRepository.getSettings()
+    ]);
+    const countsByParent = new Map(counts.map((item) => [String(item._id), item]));
+    const activeByParent = new Map();
+    const latestByParent = new Map();
+    for (const subscription of activeSubscriptions) {
+      const parentId = String(subscription.parentUserId);
+      if (!activeByParent.has(parentId)) activeByParent.set(parentId, subscription);
+    }
+    for (const subscription of latestSubscriptions) {
+      const parentId = String(subscription.parentUserId);
+      if (!latestByParent.has(parentId)) latestByParent.set(parentId, subscription);
+    }
+    return parents.map((parent) => {
+      const parentId = String(parent._id);
+      const subscription = activeByParent.get(parentId) ?? latestByParent.get(parentId) ?? null;
+      const period = subscription?.period ?? 'monthly';
+      const maximum = period === 'annual'
+        ? settings?.annualChildLimit ?? 4
+        : settings?.monthlyChildLimit ?? 2;
+      const countsForParent = countsByParent.get(parentId) ?? { active: 0, archived: 0, pending: 0 };
+      const subscriptionStatus = subscription ? statusOf(subscription, now) : 'none';
+      return {
+        parentId,
+        email: parent.email,
+        displayName: parent.parentProfile?.displayName ?? null,
+        accountStatus: parent.accountStatus,
+        subscriptionStatus,
+        period,
+        maximum,
+        active: countsForParent.active,
+        archived: countsForParent.archived,
+        available: subscriptionStatus === 'active' ? Math.max(0, maximum - countsForParent.active) : 0,
+        overLimit: subscriptionStatus === 'active' && countsForParent.active > maximum
+      };
+    });
   }
 
   async createPaymentRequest(parent, input, file) {

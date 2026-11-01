@@ -21,7 +21,14 @@ import {
 } from '../validation/learningPath.js';
 import { serializeChild } from '../services/childService.js';
 
-export function createChildrenRouter({ childService, gameService, learningPathService, authenticationMiddleware }) {
+export function createChildrenRouter({
+  childService,
+  gameService,
+  learningPathService,
+  subscriptionService,
+  appointmentService,
+  authenticationMiddleware
+}) {
   const router = Router();
   router.use(
     authenticationMiddleware,
@@ -31,8 +38,14 @@ export function createChildrenRouter({ childService, gameService, learningPathSe
   );
 
   router.get('/', async (request, response) => {
+    response.set('Cache-Control', 'private, no-store');
     const children = await childService.listChildren(request.authenticated.user._id);
     response.json({ children });
+  });
+
+  router.get('/allowance', async (request, response) => {
+    response.set('Cache-Control', 'private, no-store');
+    response.json({ allowance: await subscriptionService.getChildAllowance(request.authenticated.user._id) });
   });
 
   router.get('/registrations/pending', async (request, response) => {
@@ -43,10 +56,21 @@ export function createChildrenRouter({ childService, gameService, learningPathSe
   });
 
   router.post('/', requireCsrf, validate(createChildSchema), async (request, response) => {
-    const child = await childService.createChild(request.authenticated.user._id, request.body, {
-      pendingRegistration: true
+    const parentUserId = request.authenticated.user._id;
+    const child = await subscriptionService.withChildManagementLock(parentUserId, async () => {
+      await subscriptionService.requireChildSlot(parentUserId);
+      return childService.createChild(parentUserId, request.body, { pendingRegistration: true });
     });
     response.status(201).json({ child, registrationRequired: true });
+  });
+
+  router.delete('/:childId', requireCsrf, validate(childIdSchema, 'params'), async (request, response) => {
+    const parentUserId = request.authenticated.user._id;
+    const child = await subscriptionService.withChildManagementLock(parentUserId, async () => {
+      await appointmentService.assertChildCanBeRemoved(parentUserId, request.params.childId);
+      return childService.archiveChild(parentUserId, request.params.childId);
+    });
+    response.json({ child });
   });
 
   router.get('/:childId/consents', validate(childIdSchema, 'params'), async (request, response) => {

@@ -280,6 +280,10 @@ export function createAdminRouter({
       const settings = await subscriptionService.updateSettings(request.authenticated.user, request.body);
       response.json({ settings });
     });
+    router.get('/subscription/child-usage', async (_request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json({ parents: await subscriptionService.listParentChildUsage() });
+    });
     router.get('/payments', async (_request, response) => {
       response.json({ payments: await subscriptionService.listAdminPayments() });
     });

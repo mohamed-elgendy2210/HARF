@@ -11,7 +11,32 @@ export function createChildRepository() {
       return Child.create(data);
     },
     listChildren(parentUserId) {
-      return Child.find({ parentUserId, status: { $in: ['active', 'archived'] } }).sort({ status: 1, createdAt: -1 });
+      return Child.find({
+        parentUserId,
+        $or: [
+          { status: { $in: ['active', 'archived'] } },
+          { status: { $exists: false } }
+        ]
+      }).sort({ status: 1, createdAt: -1 });
+    },
+    async countChildren(parentUserId) {
+      const [active, archived, pending] = await Promise.all([
+        Child.countDocuments({ parentUserId, $or: [{ status: 'active' }, { status: { $exists: false } }] }),
+        Child.countDocuments({ parentUserId, status: 'archived' }),
+        Child.countDocuments({ parentUserId, status: 'pending_registration' })
+      ]);
+      return { active, archived, pending };
+    },
+    listParentChildCounts(parentIds) {
+      return Child.aggregate([
+        { $match: { parentUserId: { $in: parentIds } } },
+        { $group: {
+          _id: '$parentUserId',
+          active: { $sum: { $cond: [{ $in: [{ $ifNull: ['$status', 'active'] }, ['active']] }, 1, 0] } },
+          archived: { $sum: { $cond: [{ $eq: ['$status', 'archived'] }, 1, 0] } },
+          pending: { $sum: { $cond: [{ $eq: ['$status', 'pending_registration'] }, 1, 0] } }
+        } }
+      ]);
     },
     async listPendingRegistrations(parentUserId) {
       return Child.find({ parentUserId, status: 'pending_registration' }).sort({ createdAt: -1 });
@@ -26,6 +51,13 @@ export function createChildRepository() {
       return Child.findOneAndUpdate(
         { _id: childId, parentUserId },
         { $set: updates },
+        { new: true, runValidators: true }
+      );
+    },
+    archiveOwnedChild(childId, parentUserId) {
+      return Child.findOneAndUpdate(
+        { _id: childId, parentUserId, $or: [{ status: 'active' }, { status: { $exists: false } }] },
+        { $set: { status: 'archived' } },
         { new: true, runValidators: true }
       );
     },

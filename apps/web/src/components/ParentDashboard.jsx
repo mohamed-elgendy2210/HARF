@@ -130,6 +130,7 @@ export default function ParentDashboard({
 }) {
   const [children, setChildren] = useState([]);
   const [pendingRegistrations, setPendingRegistrations] = useState([]);
+  const [childAllowance, setChildAllowance] = useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [section, setSection] = useState(() => {
     const requestedSection = new URLSearchParams(window.location.search).get('section');
@@ -213,12 +214,14 @@ export default function ParentDashboard({
     setLoadingChildren(true);
     clearError();
     try {
-      const [result, pendingResult] = await Promise.all([
+      const [result, pendingResult, allowanceResult] = await Promise.all([
         apiRequest('/api/v1/children'),
-        apiRequest('/api/v1/children/registrations/pending')
+        apiRequest('/api/v1/children/registrations/pending'),
+        apiRequest('/api/v1/children/allowance')
       ]);
       setChildren(result.children);
       setPendingRegistrations(pendingResult.registrations);
+      setChildAllowance(allowanceResult.allowance);
       setSelectedChildId((current) => (
         result.children.some((child) => child.id === current)
           ? current
@@ -230,6 +233,15 @@ export default function ParentDashboard({
       reportError(requestError);
     } finally {
       setLoadingChildren(false);
+    }
+  };
+
+  const refreshChildAllowance = async () => {
+    try {
+      const { allowance } = await apiRequest('/api/v1/children/allowance');
+      setChildAllowance(allowance);
+    } catch (requestError) {
+      reportError(requestError);
     }
   };
 
@@ -601,6 +613,12 @@ export default function ParentDashboard({
   }, [selectedChildId]);
 
   const startCreate = () => {
+    if (!childAllowance?.canAddChild) {
+      setError(childAllowance?.subscriptionStatus === 'active'
+        ? 'وصلت إلى الحد الأقصى لعدد الأطفال المسموح به في اشتراكك.'
+        : 'يلزم اشتراك نشط لإضافة ملف طفل.');
+      return;
+    }
     setEditingChild(null);
     setChildRegistration(null);
     setRegistrationConsent(false);
@@ -782,6 +800,7 @@ export default function ParentDashboard({
       }
       setChildren((current) => [result.child, ...current.filter((item) => item.id !== result.child.id)]);
       setPendingRegistrations((current) => current.filter((item) => item.id !== result.child.id));
+      void refreshChildAllowance();
       setSelectedChildId(result.child.id);
       setChildRegistration(null);
       window.sessionStorage.removeItem('harf-child-registration-request');
@@ -997,23 +1016,20 @@ export default function ParentDashboard({
     }
   };
 
-  const setChildStatus = async (child) => {
-    const status = child.status === 'active' ? 'archived' : 'active';
-    if (status === 'archived'
-      && !window.confirm('سيتم إيقاف الملف مؤقتًا مع الاحتفاظ بسجلاته. هل تريد المتابعة؟')) return;
+  const removeChild = async (child) => {
+    if (child.status !== 'active') return;
+    if (!window.confirm('هل أنت متأكد من إزالة هذا الطفل من حسابك؟ سيتم إخفاء ملف الطفل من قائمة أطفالك النشطين، مع الاحتفاظ ببياناته التعليمية وسجل تقدمه. يمكنك إضافة طفل آخر بدلًا منه وفقًا لحدود اشتراكك.')) return;
     setBusy(true);
     clearError();
     setNotice('');
     try {
-      const result = await apiRequest(`/api/v1/children/${child.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status })
-      });
+      const result = await apiRequest(`/api/v1/children/${child.id}`, { method: 'DELETE' });
       setChildren((current) => current.map((item) => item.id === child.id ? result.child : item));
-      setNotice(status === 'archived'
-        ? 'تم إيقاف الملف مؤقتًا، مع الاحتفاظ بسجلاته.'
-        : 'تمت إعادة تفعيل الملف.');
+      void refreshChildAllowance();
+      setSelectedChildId((current) => current === child.id
+        ? children.find((item) => item.id !== child.id && item.status === 'active')?.id ?? ''
+        : current);
+      setNotice('تمت إزالة الطفل من قائمة الملفات النشطة، مع الاحتفاظ بجميع سجلاته.');
     } catch (requestError) {
       reportError(requestError);
     } finally {
@@ -1138,15 +1154,41 @@ export default function ParentDashboard({
         <button type="button" className="button button--small button--outline" disabled={busy} onClick={() => startEdit(child)}>
           تعديل
         </button>
-        <button type="button" className="button button--small button--outline" disabled={busy} onClick={() => setChildStatus(child)}>
-          {child.status === 'active' ? 'إيقاف مؤقت' : 'إعادة تفعيل'}
-        </button>
+        {child.status === 'active'
+          ? <button type="button" className="button button--small button--outline" disabled={busy} onClick={() => void removeChild(child)}>
+            إزالة الطفل من حسابي
+          </button>
+          : <span className="dashboard-privacy-note">ملف مؤرشف محفوظ بسجلاته</span>}
         <button type="button" className="auth-text-button" disabled={busy} onClick={() => toggleConsents(child)}>
           {consentChildId === child.id ? 'إخفاء الموافقات' : 'إدارة الموافقات'}
         </button>
       </div>
       {consentChildId === child.id && renderConsentControls(child)}
     </article>
+  );
+
+  const renderChildAllowance = () => {
+    if (!childAllowance) {
+      return <p className="dashboard-loading" role="status">جارٍ تحميل حد الأطفال في الاشتراك…</p>;
+    }
+    if (childAllowance.subscriptionStatus !== 'active') {
+      return <ProgressNotice>يلزم اشتراك نشط لإضافة ملفات أطفال. لا تتأثر الملفات الموجودة أو سجلاتها بانتهاء الاشتراك.</ProgressNotice>;
+    }
+    if (childAllowance.overLimit) {
+      return <ProgressNotice>يتجاوز عدد الملفات النشطة الحد الحالي للاشتراك. ستظل الملفات الحالية متاحة، ويمكنك إزالة ملف نشط لإضافة طفل آخر.</ProgressNotice>;
+    }
+    if (childAllowance.canAddChild) {
+      return <p className="dashboard-privacy-note">
+        الأطفال النشطون: {childAllowance.active} من {childAllowance.maximum}. يمكنك إضافة {childAllowance.available} طفل{childAllowance.available === 1 ? '' : 'آخر'}.
+      </p>;
+    }
+    return <ProgressNotice>لقد وصلت إلى الحد الأقصى لعدد الأطفال المسموح به في اشتراكك. أزل ملفًا نشطًا لاستعادة خانة.</ProgressNotice>;
+  };
+
+  const renderAddChildButton = () => (
+    <button type="button" className="button button--primary"
+      disabled={!childAllowance?.canAddChild || busy}
+      onClick={startCreate}>إضافة طفل</button>
   );
 
   const renderAttemptList = () => {
@@ -1239,11 +1281,18 @@ export default function ParentDashboard({
               <h3>ملفات أطفالك</h3>
               <p>اختر ملفًا لعرض تفاصيله أو أضف ملفًا جديدًا.</p>
             </div>
-            <button type="button" className="button button--primary" onClick={startCreate}>إضافة طفل</button>
+            {renderAddChildButton()}
           </div>
-          {children.length === 0
+          {renderChildAllowance()}
+          {children.filter((child) => child.status === 'active').length === 0
             ? <ProgressNotice>لم تضف ملفات أطفال بعد. يمكنك إنشاء ملف باسم مختصر وفئة عمرية اختيارية.</ProgressNotice>
-            : <div className="child-list">{children.map(renderChildCard)}</div>}
+            : <div className="child-list">{children.filter((child) => child.status === 'active').map(renderChildCard)}</div>}
+          {children.some((child) => child.status === 'archived') && (
+            <section className="dashboard-pending-registrations" aria-labelledby="archived-children-title">
+              <h4 id="archived-children-title">ملفات مؤرشفة محفوظة</h4>
+              <div className="child-list">{children.filter((child) => child.status === 'archived').map(renderChildCard)}</div>
+            </section>
+          )}
           {pendingRegistrations.length > 0 && (
             <section className="dashboard-pending-registrations" aria-labelledby="pending-registrations-title">
               <h4 id="pending-registrations-title">إعدادات تسجيل غير مكتملة</h4>
@@ -1268,11 +1317,18 @@ export default function ParentDashboard({
               <h3>ملفات أطفالي</h3>
               <p>تظل الملفات المؤرشفة محفوظة مع سجلاتها.</p>
             </div>
-            <button type="button" className="button button--primary" onClick={startCreate}>إضافة طفل</button>
+            {renderAddChildButton()}
           </div>
-          {children.length === 0
+          {renderChildAllowance()}
+          {children.filter((child) => child.status === 'active').length === 0
             ? <ProgressNotice>لا توجد ملفات أطفال بعد.</ProgressNotice>
-            : <div className="child-list">{children.map(renderChildCard)}</div>}
+            : <div className="child-list">{children.filter((child) => child.status === 'active').map(renderChildCard)}</div>}
+          {children.some((child) => child.status === 'archived') && (
+            <section className="dashboard-pending-registrations" aria-labelledby="archived-children-list-title">
+              <h4 id="archived-children-list-title">ملفات مؤرشفة محفوظة</h4>
+              <div className="child-list">{children.filter((child) => child.status === 'archived').map(renderChildCard)}</div>
+            </section>
+          )}
           {pendingRegistrations.length > 0 && (
             <section className="dashboard-pending-registrations" aria-labelledby="pending-registrations-list-title">
               <h4 id="pending-registrations-list-title">استكمال تسجيل طفل</h4>
@@ -1802,6 +1858,7 @@ export default function ParentDashboard({
       }
       return (
         <form className="auth-form child-form dashboard-form" onSubmit={saveChild}>
+          {!editingChild && renderChildAllowance()}
           <p className="auth-description">
             نطلب اسمًا مختصرًا فقط، ويمكنك اختيار مشاركة الفئة العمرية واستخدام رمز حيوان بدل رفع صورة شخصية.
           </p>
@@ -1827,7 +1884,7 @@ export default function ParentDashboard({
               ))}
             </select>
           </label>
-          <button className="button button--primary auth-submit" disabled={busy}>
+          <button className="button button--primary auth-submit" disabled={busy || (!editingChild && !childAllowance?.canAddChild)}>
             {editingChild ? 'حفظ التعديلات' : 'إضافة طفل'}
           </button>
           <button type="button" className="auth-text-button" onClick={() => selectSection(editingChild ? 'profile' : 'children')}>
@@ -1865,6 +1922,10 @@ export default function ParentDashboard({
             <button type="button" className="button button--outline" disabled={busy} onClick={() => toggleConsents(selectedChild)}>
               {consentChildId === selectedChild.id ? 'إخفاء الموافقات' : 'إدارة الموافقات'}
             </button>
+            {selectedChild.status === 'active' && (
+              <button type="button" className="button button--outline" disabled={busy}
+                onClick={() => void removeChild(selectedChild)}>إزالة الطفل من حسابي</button>
+            )}
           </div>
           {consentChildId === selectedChild.id && renderConsentControls(selectedChild)}
           <p className="dashboard-privacy-note">
@@ -2162,7 +2223,10 @@ export default function ParentDashboard({
                 <div>
                   <span className="dashboard-billing__eyebrow">الخطة {billingPeriod === 'annual' ? 'السنوية' : 'الشهرية'}</span>
                   <strong>{billingPeriod === 'annual' && subscriptionPlan?.annualAmountMinor ? selectedPrice : formattedPrice}</strong>
-                  <p>اشتراك لمدة {billingPeriod === 'annual' ? '١٢ شهرًا' : 'شهر واحد'} للوصول إلى الألعاب التعليمية المنشورة.</p>
+                  <p>
+                    اشتراك لمدة {billingPeriod === 'annual' ? '١٢ شهرًا' : 'شهر واحد'} للوصول إلى الألعاب التعليمية المنشورة،
+                    ويشمل حتى {billingPeriod === 'annual' ? (subscriptionPlan?.annualChildLimit ?? 4) : (subscriptionPlan?.monthlyChildLimit ?? 2)} ملفات أطفال نشطة.
+                  </p>
                 </div>
                 <span className="dashboard-billing__plan-icon" aria-hidden="true">✦</span>
               </article>
@@ -2209,7 +2273,7 @@ export default function ParentDashboard({
                 <label className={billingPeriod === 'monthly' ? 'is-selected' : ''}>
                   <input type="radio" name="period" value="monthly" checked={billingPeriod === 'monthly'}
                     onChange={() => setBillingPeriod('monthly')} />
-                  <span><strong>شهري</strong><small>{formattedPrice} · شهر واحد</small></span>
+                  <span><strong>شهري</strong><small>{formattedPrice} · شهر واحد · حتى {subscriptionPlan?.monthlyChildLimit ?? 2} أطفال</small></span>
                 </label>
                 {subscriptionPlan?.annualAmountMinor && (
                   <label className={billingPeriod === 'annual' ? 'is-selected' : ''}>
@@ -2219,7 +2283,7 @@ export default function ParentDashboard({
                       style: 'currency',
                       currency: subscriptionPlan.currency,
                       maximumFractionDigits: 2
-                    }).format(subscriptionPlan.annualAmountMinor / 100)} · ١٢ شهرًا</small></span>
+                    }).format(subscriptionPlan.annualAmountMinor / 100)} · ١٢ شهرًا · حتى {subscriptionPlan?.annualChildLimit ?? 4} أطفال</small></span>
                   </label>
                 )}
               </fieldset>

@@ -20,6 +20,8 @@ const methodSettingsSchema = z.object({
 export const subscriptionSettingsSchema = z.object({
   amountMinor: z.number().int().min(100).max(100000000),
   annualAmountMinor: z.number().int().min(100).max(100000000).nullable().optional(),
+  monthlyChildLimit: z.number().int().min(0).max(100).optional(),
+  annualChildLimit: z.number().int().min(0).max(100).optional(),
   currency: z.literal('EGP'),
   vodafoneCash: methodSettingsSchema,
   instaPay: methodSettingsSchema

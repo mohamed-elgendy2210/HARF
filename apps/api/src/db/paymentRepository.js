@@ -4,6 +4,12 @@ import { SubscriptionSettings } from '../models/SubscriptionSettings.js';
 
 export async function ensurePaymentIndexes() {
   await Promise.all([PaymentRequest.createIndexes(), SubscriptionSettings.createIndexes()]);
+  await SubscriptionSettings.updateOne({ key: 'monthly' }, [{
+    $set: {
+      monthlyChildLimit: { $ifNull: ['$monthlyChildLimit', 2] },
+      annualChildLimit: { $ifNull: ['$annualChildLimit', 4] }
+    }
+  }]);
 }
 
 export function createPaymentRepository() {

@@ -110,6 +110,9 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
   const [billingSettings, setBillingSettings] = useState(null);
   const [monthlyPriceInput, setMonthlyPriceInput] = useState('');
   const [annualPriceInput, setAnnualPriceInput] = useState('');
+  const [monthlyChildLimitInput, setMonthlyChildLimitInput] = useState('2');
+  const [annualChildLimitInput, setAnnualChildLimitInput] = useState('4');
+  const [parentChildUsage, setParentChildUsage] = useState([]);
   const [paymentRequests, setPaymentRequests] = useState([]);
   const [loadingBilling, setLoadingBilling] = useState(false);
   const [savingBilling, setSavingBilling] = useState(false);
@@ -209,14 +212,18 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
     setError('');
     Promise.all([
       apiRequest('/api/v1/admin/subscription/settings'),
-      apiRequest('/api/v1/admin/payments')
+      apiRequest('/api/v1/admin/payments'),
+      apiRequest('/api/v1/admin/subscription/child-usage')
     ])
-      .then(([{ settings }, { payments }]) => {
+      .then(([{ settings }, { payments }, { parents }]) => {
         if (!active) return;
         setBillingSettings(settings);
         setMonthlyPriceInput(settings.amountMinor === null ? '' : (settings.amountMinor / 100).toFixed(2));
         setAnnualPriceInput(settings.annualAmountMinor === null ? '' : (settings.annualAmountMinor / 100).toFixed(2));
         setPaymentRequests(payments);
+        setMonthlyChildLimitInput(String(settings.monthlyChildLimit));
+        setAnnualChildLimitInput(String(settings.annualChildLimit));
+        setParentChildUsage(parents);
       })
       .catch((requestError) => {
         if (active) reportError(requestError);
@@ -381,6 +388,13 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
       setError('أدخل سعرًا سنويًا صحيحًا أو اترك الحقل فارغًا لإيقاف الاشتراك السنوي.');
       return;
     }
+    const monthlyChildLimit = Number(monthlyChildLimitInput);
+    const annualChildLimit = Number(annualChildLimitInput);
+    if (!Number.isInteger(monthlyChildLimit) || monthlyChildLimit < 0 || monthlyChildLimit > 100
+      || !Number.isInteger(annualChildLimit) || annualChildLimit < 0 || annualChildLimit > 100) {
+      setError('أدخل حدًا صحيحًا من ٠ إلى ١٠٠ طفل لكل نوع اشتراك.');
+      return;
+    }
     setSavingBilling(true);
     setError('');
     setNotice('');
@@ -391,6 +405,8 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
         body: JSON.stringify({
           amountMinor,
           annualAmountMinor,
+          monthlyChildLimit,
+          annualChildLimit,
           currency: billingSettings.currency,
           vodafoneCash: billingSettings.vodafoneCash,
           instaPay: billingSettings.instaPay
@@ -399,7 +415,10 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
       setBillingSettings(settings);
       setMonthlyPriceInput((settings.amountMinor / 100).toFixed(2));
       setAnnualPriceInput(settings.annualAmountMinor === null ? '' : (settings.annualAmountMinor / 100).toFixed(2));
-      setNotice('تم حفظ السعر وإعدادات طرق الدفع. الطلبات السابقة تحتفظ بسعرها وتعليماتها وقت الإرسال.');
+      setMonthlyChildLimitInput(String(settings.monthlyChildLimit));
+      setAnnualChildLimitInput(String(settings.annualChildLimit));
+      setBillingReloadKey((key) => key + 1);
+      setNotice('تم حفظ الأسعار وطرق الدفع وحدود الأطفال. لن يتم أرشفة أي ملف عند خفض الحد.');
     } catch (requestError) {
       reportError(requestError);
     } finally {
@@ -782,6 +801,22 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
                     <p id="annual-price-help" className="dashboard-privacy-note">
                       الاشتراك السنوي يمنح ١٢ شهرًا كاملة، والسعر تحدده الإدارة. لا يتغير سعر أي طلب دفع أُرسل سابقًا.
                     </p>
+                    <fieldset className="admin-payment-method">
+                      <legend>حدود ملفات الأطفال النشطة</legend>
+                      <label>الحد الأقصى للاشتراك الشهري
+                        <input type="number" min="0" max="100" step="1" required
+                          value={monthlyChildLimitInput}
+                          onChange={(event) => setMonthlyChildLimitInput(event.target.value)} />
+                      </label>
+                      <label>الحد الأقصى للاشتراك السنوي
+                        <input type="number" min="0" max="100" step="1" required
+                          value={annualChildLimitInput}
+                          onChange={(event) => setAnnualChildLimitInput(event.target.value)} />
+                      </label>
+                      <p className="dashboard-privacy-note">
+                        الحد يحتسب الملفات النشطة فقط. خفضه لا يؤرشف الملفات الحالية، لكنه يمنع إضافة ملفات جديدة حتى يصبح العدد ضمن الحد.
+                      </p>
+                    </fieldset>
                     {[
                       ['vodafoneCash', 'Vodafone Cash'],
                       ['instaPay', 'InstaPay']
@@ -808,6 +843,29 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
                       {savingBilling ? 'جارٍ الحفظ…' : 'حفظ الإعدادات'}
                     </button>
                   </form>
+                  <section className="admin-learning-path__activities" aria-labelledby="parent-child-usage-title">
+                    <h3 id="parent-child-usage-title">استخدام حدود الأطفال لدى أولياء الأمور</h3>
+                    {parentChildUsage.length === 0
+                      ? <p className="dashboard-empty-state">لا توجد حسابات أولياء أمور لعرضها.</p>
+                      : parentChildUsage.map((parent) => (
+                        <article className="admin-dashboard-panel" key={parent.parentId}>
+                          <div>
+                            <strong>{parent.displayName || 'ولي أمر'} · <bdi dir="ltr">{parent.email}</bdi></strong>
+                            <p>
+                              الاشتراك: {parent.period === 'annual' ? 'سنوي' : 'شهري'} · الحالة: {
+                                parent.subscriptionStatus === 'active' ? 'نشط'
+                                  : parent.subscriptionStatus === 'expired' ? 'منتهٍ'
+                                    : parent.subscriptionStatus === 'scheduled' ? 'مجدول' : 'لا يوجد'
+                              }
+                            </p>
+                            <p>
+                              الحد الأقصى: {parent.maximum} · النشط: {parent.active} · المتاح: {parent.available} · المؤرشف: {parent.archived}
+                              {parent.overLimit ? ' · يتجاوز الحد الحالي' : ''}
+                            </p>
+                          </div>
+                        </article>
+                      ))}
+                  </section>
                   <section className="admin-learning-path__activities">
                     <h3>سجل طلبات الدفع</h3>
                     {paymentRequests.length === 0 ? <p className="dashboard-empty-state">لا توجد طلبات دفع.</p>
