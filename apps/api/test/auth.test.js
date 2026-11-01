@@ -775,6 +775,18 @@ function createMemoryRepository() {
       user.professionalProfile = { ...user.professionalProfile, ...professionalProfile };
       return user;
     },
+    async updateParentProfile(id, parentProfile) {
+      const user = users.get(String(id));
+      if (!user || user.role !== 'parent') return null;
+      user.parentProfile = { ...user.parentProfile, ...parentProfile };
+      return user;
+    },
+    async updateAdministratorProfile(id, adminProfile) {
+      const user = users.get(String(id));
+      if (!user || user.role !== 'admin') return null;
+      user.adminProfile = { ...user.adminProfile, ...adminProfile };
+      return user;
+    },
     async updateSpecialistDocuments(id, documents) {
       const user = users.get(String(id));
       if (!user || user.role !== 'specialist') return null;
@@ -3708,6 +3720,62 @@ test('admin can remove only pending registration requests and removal invalidate
   });
   assert.equal(rejected.status, 404);
   assert.equal(repository.users.has(approved.user._id), true);
+});
+
+test('parents and administrators can update only their own display names', async () => {
+  const parent = await createApprovedParent('parent-edit-profile@harf.test');
+  const parentUpdate = await request('/auth/parent/profile', {
+    method: 'PATCH',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: { displayName: 'ولي أمر جديد' }
+  });
+  assert.equal(parentUpdate.status, 200);
+  assert.equal((await parentUpdate.json()).user.parentProfile.displayName, 'ولي أمر جديد');
+  assert.equal(repository.users.get(parent.user._id).parentProfile.displayName, 'ولي أمر جديد');
+
+  const invalidParentUpdate = await request('/auth/parent/profile', {
+    method: 'PATCH',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: { displayName: 'x', email: 'new-email@harf.test' }
+  });
+  assert.equal(invalidParentUpdate.status, 400);
+
+  const forbiddenAdminUpdate = await request('/auth/admin/profile', {
+    method: 'PATCH',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: { displayName: 'غير مسموح' }
+  });
+  assert.equal(forbiddenAdminUpdate.status, 403);
+
+  const administratorSession = await authService.createSession(admin);
+  const administratorCookie = `harf.sid=${administratorSession.rawToken}`;
+  const missingCsrf = await request('/auth/admin/profile', {
+    method: 'PATCH',
+    cookie: administratorCookie,
+    body: { displayName: 'مسؤول جديد' }
+  });
+  assert.equal(missingCsrf.status, 403);
+
+  const adminUpdate = await request('/auth/admin/profile', {
+    method: 'PATCH',
+    cookie: administratorCookie,
+    csrfToken: administratorSession.csrfToken,
+    body: { displayName: 'مسؤول جديد' }
+  });
+  assert.equal(adminUpdate.status, 200);
+  assert.equal((await adminUpdate.json()).user.adminProfile.displayName, 'مسؤول جديد');
+  assert.equal(repository.users.get(admin._id).adminProfile.displayName, 'مسؤول جديد');
+
+  const forbiddenParentUpdate = await request('/auth/parent/profile', {
+    method: 'PATCH',
+    cookie: administratorCookie,
+    csrfToken: administratorSession.csrfToken,
+    body: { displayName: 'غير مسموح' }
+  });
+  assert.equal(forbiddenParentUpdate.status, 403);
 });
 
 test('specialist directory excludes incomplete profiles until verified, approved, and explicitly listed', async () => {

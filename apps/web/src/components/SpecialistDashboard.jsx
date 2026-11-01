@@ -272,7 +272,7 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
               setSection('profile');
               setMobileMenuOpen(false);
             }}>
-            الملف المهني
+            تعديل الملف الشخصي
           </button>
           <button type="button" className={section === 'appointments' ? 'dashboard-nav__item is-active' : 'dashboard-nav__item'}
             aria-current={section === 'appointments' ? 'page' : undefined} onClick={() => {
@@ -298,7 +298,7 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
         <header className="dashboard-main__header">
           <div>
             <span className="dashboard-eyebrow">حرف · الأخصائيون</span>
-            <h2>{section === 'availability' ? 'مواعيدك المتاحة' : section === 'profile' ? 'ملفك المهني' : section === 'notifications' ? 'الإشعارات' : 'طلبات وسجل المواعيد'}</h2>
+            <h2>{section === 'availability' ? 'مواعيدك المتاحة' : section === 'profile' ? 'تعديل الملف الشخصي' : section === 'notifications' ? 'الإشعارات' : 'طلبات وسجل المواعيد'}</h2>
           </div>
           <button className="button button--small button--outline" type="button" onClick={onSignOut}>تسجيل الخروج</button>
         </header>

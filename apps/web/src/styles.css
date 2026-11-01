@@ -10426,3 +10426,11 @@ summary:focus-visible {
     transition: none;
   }
 }
+
+:is(a[href], button:not(:disabled), input[type='button']:not(:disabled), input[type='submit']:not(:disabled), input[type='reset']:not(:disabled)) {
+  cursor: pointer;
+}
+
+:is(button:disabled, input[type='button']:disabled, input[type='submit']:disabled, input[type='reset']:disabled) {
+  cursor: not-allowed;
+}

@@ -46,6 +46,7 @@ const sections = [
   { id: 'payments', label: 'الاشتراك والدفع', icon: 'ج.م' },
   { id: 'notifications', label: 'الإشعارات', icon: '♧' },
   { id: 'testimonials', label: 'آرائي عن حرف', icon: '♡' },
+  { id: 'accountProfile', label: 'الملف الشخصي', icon: '♙' },
   { id: 'settings', label: 'إعدادات الحساب', icon: '⚙' }
 ];
 const sectionTitles = Object.fromEntries(sections.map(({ id, label }) => [id, label]));
@@ -74,7 +75,8 @@ export default function ParentDashboard({
   backLabel = 'العودة للحساب',
   onPasswordRecovery,
   onSignOut,
-  onReauthenticate
+  onReauthenticate,
+  onProfileUpdated
 }) {
   const [children, setChildren] = useState([]);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -118,6 +120,11 @@ export default function ParentDashboard({
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [sessionExpired, setSessionExpired] = useState(false);
+  const [profileName, setProfileName] = useState(user.parentProfile?.displayName ?? '');
+
+  useEffect(() => {
+    setProfileName(user.parentProfile?.displayName ?? '');
+  }, [user.parentProfile?.displayName]);
 
   const clearError = () => {
     setError('');
@@ -656,6 +663,26 @@ export default function ParentDashboard({
     clearError();
     if (nextSection === 'activity' || nextSection === 'progress') {
       setAttemptPage(1);
+    }
+  };
+
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    clearError();
+    setNotice('');
+    try {
+      const { user: updatedUser } = await apiRequest('/api/v1/auth/parent/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: profileName })
+      });
+      onProfileUpdated(updatedUser);
+      setNotice('تم حفظ الملف الشخصي.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -1497,6 +1524,26 @@ export default function ParentDashboard({
 
     if (section === 'notifications') {
       return <NotificationCenter appointmentHref="/dashboard?section=appointments" />;
+    }
+
+    if (section === 'accountProfile') {
+      return (
+        <section className="dashboard-section">
+          <form className="auth-form dashboard-form" onSubmit={saveProfile}>
+            <p className="auth-description">حدّث الاسم الظاهر في حسابك. البريد الإلكتروني وكلمة المرور يُداران عبر مسارات الحساب الآمنة.</p>
+            <label>الاسم المعروض
+              <input required minLength={2} maxLength={80} value={profileName}
+                onChange={(event) => setProfileName(event.target.value)} />
+            </label>
+            <label>البريد الإلكتروني
+              <input value={user?.email ?? ''} readOnly dir="ltr" />
+            </label>
+            <button type="submit" className="button button--primary" disabled={busy}>
+              {busy ? 'جارٍ الحفظ…' : 'حفظ الملف الشخصي'}
+            </button>
+          </form>
+        </section>
+      );
     }
 
     return (

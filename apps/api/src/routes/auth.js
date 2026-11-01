@@ -14,6 +14,8 @@ import { validate } from '../middleware/validate.js';
 import {
   emailSchema,
   loginSchema,
+  administratorProfileSchema,
+  parentProfileSchema,
   passwordResetSchema,
   registrationSchema,
   specialistProfileSchema,
@@ -178,6 +180,16 @@ export function createAuthRouter({ authService, config, authenticationMiddleware
       throw new AppError(403, 'FORBIDDEN', 'Only specialists can edit a professional profile.');
     }
     const user = await authService.updateSpecialistProfile(request.authenticated.user, request.body);
+    response.json({ user });
+  });
+
+  router.patch('/parent/profile', authenticationMiddleware, requireAuthentication, requireRole('parent'), requireCsrf, validate(parentProfileSchema), async (request, response) => {
+    const user = await authService.updateParentProfile(request.authenticated.user, request.body);
+    response.json({ user });
+  });
+
+  router.patch('/admin/profile', authenticationMiddleware, requireAuthentication, requireRole('admin'), requireCsrf, validate(administratorProfileSchema), async (request, response) => {
+    const user = await authService.updateAdministratorProfile(request.authenticated.user, request.body);
     response.json({ user });
   });
 

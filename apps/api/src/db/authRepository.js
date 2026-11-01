@@ -134,6 +134,24 @@ export function createAuthRepository() {
         { new: true, runValidators: true }
       );
     },
+    updateParentProfile(userId, profile) {
+      return User.findOneAndUpdate(
+        { _id: userId, role: 'parent' },
+        { $set: Object.fromEntries(
+          Object.entries(profile).map(([key, value]) => [`parentProfile.${key}`, value])
+        ) },
+        { new: true, runValidators: true }
+      );
+    },
+    updateAdministratorProfile(userId, profile) {
+      return User.findOneAndUpdate(
+        { _id: userId, role: 'admin' },
+        { $set: Object.fromEntries(
+          Object.entries(profile).map(([key, value]) => [`adminProfile.${key}`, value])
+        ) },
+        { new: true, runValidators: true }
+      );
+    },
     async updateSpecialistDocuments(userId, documents) {
       const current = await User.findOne({ _id: userId, role: 'specialist' })
         .select('professionalProfile.profilePhoto professionalProfile.medicalCardFront professionalProfile.medicalCardBack');

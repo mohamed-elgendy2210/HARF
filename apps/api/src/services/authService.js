@@ -72,7 +72,12 @@ export function serializeAccount(user) {
     emailVerified: Boolean(record.emailVerifiedAt),
     approvalStatus: record.approvalStatus,
     accountStatus: record.accountStatus,
-    ...(record.role === 'parent' ? { parentProfile: record.parentProfile ?? {} } : {}),
+    ...(record.role === 'parent' ? {
+      parentProfile: { displayName: record.parentProfile?.displayName ?? '' }
+    } : {}),
+    ...(record.role === 'admin' ? {
+      adminProfile: { displayName: record.adminProfile?.displayName ?? '' }
+    } : {}),
     ...(professionalProfile ? { professionalProfile } : {})
   };
 }
@@ -345,6 +350,30 @@ export class AuthService {
         profileComplete: isProfessionalProfileComplete(completeProfile),
         publicListing: completeProfile.publicListing
       }
+    });
+    return serializeAccount(updatedUser);
+  }
+
+  async updateParentProfile(user, profile) {
+    const updatedUser = await this.repository.updateParentProfile(user._id ?? user.id, {
+      displayName: profile.displayName.trim()
+    });
+    if (!updatedUser) throw new AppError(404, 'ACCOUNT_NOT_FOUND', 'The parent account was not found.');
+    await this.recordAudit('account.parent_profile_updated', {
+      actorUserId: user._id ?? user.id,
+      targetUserId: user._id ?? user.id
+    });
+    return serializeAccount(updatedUser);
+  }
+
+  async updateAdministratorProfile(user, profile) {
+    const updatedUser = await this.repository.updateAdministratorProfile(user._id ?? user.id, {
+      displayName: profile.displayName.trim()
+    });
+    if (!updatedUser) throw new AppError(404, 'ACCOUNT_NOT_FOUND', 'The administrator account was not found.');
+    await this.recordAudit('account.administrator_profile_updated', {
+      actorUserId: user._id ?? user.id,
+      targetUserId: user._id ?? user.id
     });
     return serializeAccount(updatedUser);
   }

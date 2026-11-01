@@ -42,6 +42,17 @@ export const specialistProfileSchema = z.object({
   publicListing: z.boolean().default(false)
 }).strict();
 
+export const parentProfileSchema = z.object({
+  displayName: z.string().trim().min(2).max(80).refine(
+    isReadableName,
+    'Enter a name containing letters or numbers.'
+  )
+}).strict();
+
+export const administratorProfileSchema = z.object({
+  displayName
+}).strict();
+
 export const approvalSchema = z.object({
   approvalStatus: z.enum(['approved', 'rejected'])
 }).strict();

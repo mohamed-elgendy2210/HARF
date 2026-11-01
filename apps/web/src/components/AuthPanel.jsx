@@ -383,6 +383,7 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
                 <AdminDashboard
                   user={user}
                   onSignOut={signOut}
+                  onProfileUpdated={setUser}
                   onReauthenticate={() => {
                     setUser(null);
                     startView('login');
@@ -414,6 +415,7 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
                   backLabel="العودة للموقع"
                   onPasswordRecovery={() => startView('forgot')}
                   onSignOut={signOut}
+                  onProfileUpdated={setUser}
                   onReauthenticate={() => {
                     setUser(null);
                     startView('login');

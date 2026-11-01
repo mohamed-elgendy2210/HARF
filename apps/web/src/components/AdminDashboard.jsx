@@ -22,7 +22,8 @@ const views = [
   { id: 'testimonials', label: 'آراء أولياء الأمور', icon: '♡' },
   { id: 'sessions', label: 'إدارة الجلسات والاجتماعات', icon: '▣' },
   { id: 'reports', label: 'التقارير', icon: '▤' },
-  { id: 'notifications', label: 'الإشعارات', icon: '♧' }
+  { id: 'notifications', label: 'الإشعارات', icon: '♧' },
+  { id: 'profile', label: 'الملف الشخصي', icon: '♙' }
 ];
 
 const approvalLabels = {
@@ -54,7 +55,8 @@ const viewTitles = {
   testimonials: 'آراء أولياء الأمور',
   sessions: 'إدارة الجلسات والاجتماعات',
   reports: 'تقارير المنصة',
-  notifications: 'الإشعارات'
+  notifications: 'الإشعارات',
+  profile: 'تعديل الملف الشخصي'
 };
 
 function accountDisplayName(account) {
@@ -84,7 +86,7 @@ function priceToMinorUnits(value) {
     : null;
 }
 
-export default function AdminDashboard({ user, onSignOut, onReauthenticate }) {
+export default function AdminDashboard({ user, onSignOut, onReauthenticate, onProfileUpdated }) {
   const [accounts, setAccounts] = useState([]);
   const [administrators, setAdministrators] = useState([]);
   const [administratorEmail, setAdministratorEmail] = useState('');
@@ -115,6 +117,12 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate }) {
   const [platformImageCategory, setPlatformImageCategory] = useState('Backgrounds');
   const [loadingPlatform, setLoadingPlatform] = useState(false);
   const [savingPlatform, setSavingPlatform] = useState(false);
+  const [profileName, setProfileName] = useState(user.adminProfile?.displayName ?? '');
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    setProfileName(user.adminProfile?.displayName ?? '');
+  }, [user.adminProfile?.displayName]);
 
   const platformImageCategories = useMemo(
     () => [...new Set(platformImages
@@ -133,6 +141,26 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate }) {
     setError(requestError.status === 401
       ? 'انتهت جلسة المسؤول. سجّل الدخول مجددًا للمتابعة.'
       : requestError.message);
+  };
+
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    setSavingProfile(true);
+    setError('');
+    setNotice('');
+    try {
+      const { user: updatedUser } = await apiRequest('/api/v1/auth/admin/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: profileName })
+      });
+      onProfileUpdated(updatedUser);
+      setNotice('تم حفظ الملف الشخصي.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   const loadAccounts = async () => {
@@ -630,7 +658,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate }) {
             <h1>{viewTitles[view]}</h1>
           </div>
           <div className="admin-dashboard__topbar-actions">
-            <span className="admin-dashboard__identity">{user.email}</span>
+            <span className="admin-dashboard__identity">{user.adminProfile?.displayName || user.email}</span>
             <a className="button button--small button--outline" href="/">العودة للموقع</a>
             <button type="button" className="button button--small button--primary" onClick={onSignOut}>تسجيل الخروج</button>
           </div>
@@ -971,11 +999,28 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate }) {
           <NotificationCenter />
         ) : view === 'learningPath' ? (
           <AdminLearningPaths logoUrl={platformSettings?.logoUrl} />
+        ) : view === 'profile' ? (
+          <section className="admin-dashboard__content admin-dashboard-panel">
+            <h2>تعديل الملف الشخصي</h2>
+            <form className="auth-form" onSubmit={saveProfile}>
+              <p className="auth-description">يمكنك تحديث الاسم الظاهر في لوحة الإدارة. البريد الإلكتروني وكلمة المرور يُداران عبر مسارات الحساب الآمنة.</p>
+              <label>الاسم المعروض
+                <input required minLength={2} maxLength={100} value={profileName}
+                  onChange={(event) => setProfileName(event.target.value)} />
+              </label>
+              <label>البريد الإلكتروني
+                <input value={user.email} readOnly dir="ltr" />
+              </label>
+              <button type="submit" className="button button--primary" disabled={savingProfile}>
+                {savingProfile ? 'جارٍ الحفظ…' : 'حفظ الملف الشخصي'}
+              </button>
+            </form>
+          </section>
         ) : view === 'overview' ? (
           <div className="admin-dashboard__content">
             <section className="admin-dashboard-welcome">
               <div>
-                <span>أهلًا بك، مسؤول حرف</span>
+                <span>أهلًا بك، {user.adminProfile?.displayName || 'مسؤول حرف'}</span>
                 <h2>إدارة الحسابات ومراجعة طلبات الانضمام</h2>
                 <p>الأرقام هنا محسوبة من الحسابات المحمّلة حاليًا من النظام.</p>
               </div>

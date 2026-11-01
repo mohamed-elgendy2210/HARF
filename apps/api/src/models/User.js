@@ -4,6 +4,10 @@ const parentProfileSchema = new mongoose.Schema({
   displayName: { type: String, trim: true, maxlength: 80 }
 }, { _id: false, strict: 'throw' });
 
+const administratorProfileSchema = new mongoose.Schema({
+  displayName: { type: String, trim: true, maxlength: 100 }
+}, { _id: false, strict: 'throw' });
+
 const storedImageSchema = new mongoose.Schema({
   storageName: { type: String, required: true, match: /^[a-f\d-]{36}$/i },
   mimeType: { type: String, enum: ['image/png', 'image/jpeg', 'image/webp'], required: true },
@@ -29,6 +33,7 @@ const userSchema = new mongoose.Schema({
   approvalStatus: { type: String, enum: ['pending', 'approved', 'rejected'], required: true },
   accountStatus: { type: String, enum: ['active', 'suspended'], default: 'active', required: true },
   parentProfile: { type: parentProfileSchema, default: undefined },
+  adminProfile: { type: administratorProfileSchema, default: undefined },
   professionalProfile: { type: professionalProfileSchema, default: undefined }
 }, {
   timestamps: true,
