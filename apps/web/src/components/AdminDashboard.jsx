@@ -6,6 +6,7 @@ import AdminLearningPaths from './AdminLearningPaths.jsx';
 import NotificationCenter from './NotificationCenter.jsx';
 import AdminTestimonials from './AdminTestimonials.jsx';
 import AdminSessions from './AdminSessions.jsx';
+import AdminSessionPayments from './AdminSessionPayments.jsx';
 
 const AdminGameLibrary = lazy(() => import('./AdminGameLibrary.jsx'));
 
@@ -21,6 +22,7 @@ const views = [
   { id: 'platform', label: 'هوية المنصة والصفحة الرئيسية', icon: '✧' },
   { id: 'testimonials', label: 'آراء أولياء الأمور', icon: '♡' },
   { id: 'sessions', label: 'إدارة الجلسات والاجتماعات', icon: '▣' },
+  { id: 'sessionPayments', label: 'مدفوعات الجلسات', icon: 'ج.م' },
   { id: 'reports', label: 'التقارير', icon: '▤' },
   { id: 'notifications', label: 'الإشعارات', icon: '♧' },
   { id: 'profile', label: 'الملف الشخصي', icon: '♙' }
@@ -54,6 +56,7 @@ const viewTitles = {
   platform: 'هوية المنصة والصفحة الرئيسية',
   testimonials: 'آراء أولياء الأمور',
   sessions: 'إدارة الجلسات والاجتماعات',
+  sessionPayments: 'مدفوعات الجلسات',
   reports: 'تقارير المنصة',
   notifications: 'الإشعارات',
   profile: 'تعديل الملف الشخصي'
@@ -685,6 +688,8 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
           </Suspense>
         ) : view === 'sessions' ? (
           <AdminSessions />
+        ) : view === 'sessionPayments' ? (
+          <AdminSessionPayments onOpenNotifications={() => setView('notifications')} />
         ) : view === 'administrators' ? (
           <section className="admin-dashboard__content admin-dashboard-panel">
             <div className="admin-dashboard-panel__heading">

@@ -10,6 +10,55 @@ const meetingSchema = new mongoose.Schema({
   endedAt: { type: Date, default: null }
 }, { _id: false, versionKey: false, strict: 'throw' });
 
+const sessionPaymentReviewSchema = new mongoose.Schema({
+  status: { type: String, enum: ['approved', 'rejected'], required: true },
+  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  reviewedAt: { type: Date, required: true },
+  decisionNote: { type: String, trim: true, maxlength: 300, default: '' },
+  method: { type: String, enum: ['vodafone_cash', 'instapay'], required: true },
+  receipt: {
+    storageName: { type: String, match: /^[a-f\d-]{36}$/i },
+    mimeType: { type: String, enum: ['image/png', 'image/jpeg', 'image/webp'] },
+    sizeBytes: { type: Number, min: 1, max: 5 * 1024 * 1024 }
+  },
+  submittedAt: { type: Date, required: true }
+}, { _id: false, versionKey: false, strict: 'throw' });
+
+const sessionPaymentSchema = new mongoose.Schema({
+  status: {
+    type: String,
+    enum: ['awaiting_payment', 'pending_verification', 'approved', 'rejected', 'expired'],
+    required: true
+  },
+  amountMinor: { type: Number, required: true, min: 100 },
+  currency: { type: String, enum: ['EGP'], required: true },
+  deadline: { type: Date, required: true },
+  methods: {
+    vodafone_cash: {
+      label: { type: String, trim: true, maxlength: 40 },
+      recipient: { type: String, trim: true, maxlength: 120 },
+      instructions: { type: String, trim: true, maxlength: 500 }
+    },
+    instapay: {
+      label: { type: String, trim: true, maxlength: 40 },
+      recipient: { type: String, trim: true, maxlength: 120 },
+      instructions: { type: String, trim: true, maxlength: 500 }
+    }
+  },
+  method: { type: String, enum: ['vodafone_cash', 'instapay'] },
+  receipt: {
+    storageName: { type: String, match: /^[a-f\d-]{36}$/i },
+    mimeType: { type: String, enum: ['image/png', 'image/jpeg', 'image/webp'] },
+    sizeBytes: { type: Number, min: 1, max: 5 * 1024 * 1024 }
+  },
+  submittedAt: { type: Date },
+  verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  verifiedAt: { type: Date },
+  expirationNotifiedAt: { type: Date },
+  rejectionReason: { type: String, trim: true, maxlength: 300, default: '' },
+  history: { type: [sessionPaymentReviewSchema], default: [] }
+}, { _id: false, versionKey: false, strict: 'throw' });
+
 const appointmentSchema = new mongoose.Schema({
   parentUserId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   childId: { type: mongoose.Schema.Types.ObjectId, ref: 'Child', required: true },
@@ -20,7 +69,7 @@ const appointmentSchema = new mongoose.Schema({
   durationMinutes: { type: Number, required: true, min: 15, max: 240 },
   amountMinor: { type: Number, required: true, min: 100 },
   currency: { type: String, enum: ['EGP'], required: true },
-  status: { type: String, enum: ['pending', 'accepted', 'rejected', 'expired'], required: true, default: 'pending' },
+  status: { type: String, enum: ['pending', 'awaiting_payment', 'payment_under_review', 'accepted', 'rejected', 'expired'], required: true, default: 'pending' },
   requestedAt: { type: Date, required: true },
   expiresAt: { type: Date, required: true },
   decidedAt: { type: Date, default: null },
@@ -34,6 +83,7 @@ const appointmentSchema = new mongoose.Schema({
   meeting: { type: meetingSchema, default: undefined },
   meetingProvisioningFailedAt: { type: Date, default: null },
   meetingProvisioningErrorCode: { type: String, trim: true, maxlength: 80, default: '' },
+  payment: { type: sessionPaymentSchema, default: undefined },
   privateSpecialistNotes: { type: String, trim: true, maxlength: 4000, default: '' },
   parentProgressReport: {
     summary: { type: String, trim: true, maxlength: 2000, default: '' },

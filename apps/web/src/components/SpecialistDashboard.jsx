@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../lib/api.js';
 import { displayNameOrFallback } from '../lib/displayName.js';
 import NotificationCenter from './NotificationCenter.jsx';
@@ -16,6 +16,8 @@ const days = [
 
 const statuses = {
   pending: 'بانتظار القرار',
+  awaiting_payment: 'في انتظار دفع ولي الأمر',
+  payment_under_review: 'الدفع قيد المراجعة الإدارية',
   accepted: 'تم التأكيد',
   rejected: 'مرفوض',
   expired: 'انتهت مهلة الرد'
@@ -25,6 +27,7 @@ const sessionStatuses = {
   in_progress: 'جارية',
   completed: 'مكتملة'
 };
+const APPOINTMENTS_PER_PAGE = 6;
 
 function blankSchedule() {
   return {
@@ -48,6 +51,13 @@ function formatAppointmentTime(appointment) {
   }).format(new Date(appointment.startsAt));
 }
 
+function appointmentRequestTimestamp(appointment) {
+  const requestedAt = Date.parse(appointment.requestedAt ?? '');
+  if (Number.isFinite(requestedAt)) return requestedAt;
+  const startsAt = Date.parse(appointment.startsAt ?? '');
+  return Number.isFinite(startsAt) ? startsAt : 0;
+}
+
 export default function SpecialistDashboard({ user, onSignOut, onReauthenticate, onProfileUpdated }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [section, setSection] = useState(() => (
@@ -57,6 +67,7 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   ));
   const [form, setForm] = useState(blankSchedule);
   const [appointments, setAppointments] = useState([]);
+  const [visibleAppointmentCount, setVisibleAppointmentCount] = useState(APPOINTMENTS_PER_PAGE);
   const [meetingAppointment, setMeetingAppointment] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -244,6 +255,9 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   };
 
   const pendingCount = appointments.filter(({ status }) => status === 'pending').length;
+  const orderedAppointments = useMemo(() => [...appointments].sort(
+    (first, second) => appointmentRequestTimestamp(second) - appointmentRequestTimestamp(first)
+  ), [appointments]);
   const approvedProfile = user.approvalStatus === 'approved' && user.emailVerified && user.accountStatus === 'active';
 
   return (
@@ -525,13 +539,20 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
             <p>طلبات الحجز تنتهي بعد ٤٨ ساعة دون قرار. ردّك على الطلب يحجز أو يحرر الموعد.</p>
             {appointments.length === 0 ? <div className="dashboard-empty-state">لا توجد طلبات أو مواعيد مسجلة.</div> : (
               <div className="specialist-appointment-list">
-                {appointments.map((appointment) => (
+                {orderedAppointments.slice(0, visibleAppointmentCount).map((appointment) => (
                   <article className="specialist-appointment-card" key={appointment.id}>
                     <div>
                       <h4>{appointment.childName || 'ملف طفل'}</h4>
                       <time dateTime={appointment.startsAt}>{formatAppointmentTime(appointment)}</time>
                       <p>ولي الأمر: {appointment.parentName || 'غير متاح'} · {appointment.durationMinutes} دقيقة · {formatPrice(appointment.amountMinor, appointment.currency)}</p>
                       <span className={`appointment-status appointment-status--${appointment.status}`}>{statuses[appointment.status]}</span>
+                      {['awaiting_payment', 'payment_under_review'].includes(appointment.status) && (
+                        <p className="dashboard-privacy-note">
+                          {appointment.status === 'awaiting_payment'
+                            ? 'وافق الأخصائي على الطلب، والموعد ينتظر إتمام ولي الأمر للدفع.'
+                            : 'أرسل ولي الأمر إيصال الدفع، وهو قيد المراجعة الإدارية.'}
+                        </p>
+                      )}
                       {appointment.status === 'accepted' && (
                         <p>حالة الجلسة: {sessionStatuses[appointment.sessionStatus] || sessionStatuses.not_started}
                           {appointment.sessionStartedAt ? ` · بدأت ${formatAppointmentTime({ ...appointment, startsAt: appointment.sessionStartedAt })}` : ''}
@@ -592,6 +613,15 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
                   </article>
                 ))}
               </div>
+            )}
+            {orderedAppointments.length > visibleAppointmentCount && (
+              <button
+                type="button"
+                className="button button--outline"
+                onClick={() => setVisibleAppointmentCount((count) => count + APPOINTMENTS_PER_PAGE)}
+              >
+                إظهار المزيد
+              </button>
             )}
           </section>
         )}

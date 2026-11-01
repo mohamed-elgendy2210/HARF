@@ -33,8 +33,8 @@ export function createAppointmentRepository() {
     createAppointment(data) {
       return Appointment.create(data);
     },
-    expirePending(now, specialistUserId) {
-      return Appointment.updateMany({
+    async expirePending(now, specialistUserId) {
+      const requestExpiry = Appointment.updateMany({
         status: 'pending',
         slotReserved: true,
         expiresAt: { $lte: now },
@@ -42,6 +42,40 @@ export function createAppointmentRepository() {
       }, {
         $set: { status: 'expired', slotReserved: false, expiredAt: now }
       });
+      const paymentExpiry = Appointment.updateMany({
+        status: 'awaiting_payment',
+        slotReserved: true,
+        'payment.status': 'awaiting_payment',
+        'payment.deadline': { $lte: now },
+        ...(specialistUserId ? { specialistUserId } : {})
+      }, {
+        $set: {
+          status: 'expired',
+          slotReserved: false,
+          expiredAt: now,
+          'payment.status': 'expired'
+        }
+      });
+      return Promise.all([requestExpiry, paymentExpiry]);
+    },
+    listExpiredPaymentAppointments(now) {
+      return Appointment.find({
+        status: 'awaiting_payment',
+        slotReserved: true,
+        'payment.status': 'awaiting_payment',
+        'payment.deadline': { $lte: now }
+      }).select('_id parentUserId specialistUserId payment.deadline').lean();
+    },
+    claimExpiredPaymentNotification(appointmentId, expiredAt) {
+      return Appointment.findOneAndUpdate({
+        _id: appointmentId,
+        status: 'expired',
+        'payment.status': 'expired',
+        expiredAt,
+        'payment.expirationNotifiedAt': { $exists: false }
+      }, {
+        $set: { 'payment.expirationNotifiedAt': expiredAt }
+      }, { new: true }).select('_id parentUserId specialistUserId').lean();
     },
     listParentAppointments(parentUserId) {
       return Appointment.find({ parentUserId })
@@ -144,7 +178,7 @@ export function createAppointmentRepository() {
         .populate({ path: 'specialistUserId', select: 'professionalProfile.displayName professionalProfile.specialty' })
         .lean();
     },
-    decideAppointment(appointmentId, specialistUserId, status, now, decisionNote) {
+    decideAppointment(appointmentId, specialistUserId, status, now, decisionNote, payment) {
       return Appointment.findOneAndUpdate({
         _id: appointmentId,
         specialistUserId,
@@ -154,9 +188,12 @@ export function createAppointmentRepository() {
       }, {
         $set: {
           status,
-          slotReserved: status === 'accepted',
+          slotReserved: status !== 'rejected',
           decidedAt: now,
-          ...(status === 'accepted' ? { acceptedAt: now } : { rejectedAt: now }),
+          ...(status === 'awaiting_payment' ? {
+            acceptedAt: now,
+            payment
+          } : { rejectedAt: now }),
           decisionNote
         }
       }, { new: true, runValidators: true })

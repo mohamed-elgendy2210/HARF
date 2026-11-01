@@ -65,6 +65,45 @@ function formatDate(value) {
   }).format(date);
 }
 
+function appointmentRequestTimestamp(appointment) {
+  const requestedAt = Date.parse(appointment.requestedAt ?? '');
+  if (Number.isFinite(requestedAt)) return requestedAt;
+  const startsAt = Date.parse(appointment.startsAt ?? '');
+  return Number.isFinite(startsAt) ? startsAt : 0;
+}
+
+function appointmentHistoryCategory(appointment) {
+  if (appointment.status === 'rejected' || appointment.payment?.status === 'rejected') return 'rejected';
+  if (appointment.status === 'awaiting_payment' || appointment.payment?.status === 'awaiting_payment') return 'awaiting_payment';
+  if (appointment.status === 'payment_under_review' || appointment.payment?.status === 'pending_verification') return 'under_review';
+  if (appointment.status === 'accepted' || appointment.payment?.status === 'approved') return 'confirmed';
+  if (appointment.status === 'pending') return 'pending';
+  if (appointment.status === 'expired' || appointment.payment?.status === 'expired') return 'expired';
+  return 'other';
+}
+
+function dateKeyInTimeZone(value, timeZone) {
+  const options = { year: 'numeric', month: '2-digit', day: '2-digit' };
+  if (timeZone) options.timeZone = timeZone;
+  const parts = new Intl.DateTimeFormat('en-CA', options).formatToParts(new Date(value));
+  const dateParts = Object.fromEntries(parts
+    .filter(({ type }) => type !== 'literal')
+    .map(({ type, value: partValue }) => [type, partValue]));
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+}
+
+function formatAppointmentDate(value, timeZone) {
+  const options = { dateStyle: 'full' };
+  if (timeZone) options.timeZone = timeZone;
+  return new Intl.DateTimeFormat('ar-EG', options).format(new Date(value));
+}
+
+function formatAppointmentTime(value, timeZone) {
+  const options = { timeStyle: 'short' };
+  if (timeZone) options.timeZone = timeZone;
+  return new Intl.DateTimeFormat('ar-EG', options).format(new Date(value));
+}
+
 function ProgressNotice({ children }) {
   return <div className="dashboard-empty-state">{children}</div>;
 }
@@ -111,8 +150,16 @@ export default function ParentDashboard({
   const [loadingAvailability, setLoadingAvailability] = useState(false);
   const [loadingAppointments, setLoadingAppointments] = useState(false);
   const [appointments, setAppointments] = useState([]);
+  const [appointmentFilter, setAppointmentFilter] = useState('all');
   const [meetingAppointment, setMeetingAppointment] = useState(null);
-  const [bookingAppointment, setBookingAppointment] = useState(false);
+  const [bookingSlotStartsAt, setBookingSlotStartsAt] = useState('');
+  const [selectedSessionPaymentId, setSelectedSessionPaymentId] = useState('');
+  const [sessionPaymentDetails, setSessionPaymentDetails] = useState(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
+  const [paymentReceiptFile, setPaymentReceiptFile] = useState(null);
+  const [paymentReceiptPreview, setPaymentReceiptPreview] = useState('');
+  const [loadingSessionPayment, setLoadingSessionPayment] = useState(false);
+  const [submittingSessionPayment, setSubmittingSessionPayment] = useState(false);
   const [loadingBilling, setLoadingBilling] = useState(false);
   const [loadingChildren, setLoadingChildren] = useState(true);
   const [loadingAttempts, setLoadingAttempts] = useState(false);
@@ -364,7 +411,7 @@ export default function ParentDashboard({
       return;
     }
     setSelectedChildId(activeChild.id);
-    setBookingAppointment(true);
+    setBookingSlotStartsAt(slot.startsAt);
     clearError();
     setNotice('');
     try {
@@ -377,21 +424,15 @@ export default function ParentDashboard({
           startsAt: slot.startsAt
         })
       });
-      setNotice(`تم إرسال طلب الموعد لـ ${activeChild.displayName}. ينتظر رد الأخصائي خلال ٤٨ ساعة.`);
+      setNotice(`تم إرسال طلب الموعد لـ ${activeChild.displayName}. ينتهي الطلب عند موعد الجلسة أو بعد ٤٨ ساعة من إرساله، أيهما أقرب.`);
       setAppointments((current) => [appointment, ...current.filter(({ id }) => id !== appointment.id)]);
       selectSection('appointments');
     } catch (requestError) {
       reportError(requestError);
     } finally {
-      setBookingAppointment(false);
+      setBookingSlotStartsAt('');
     }
   };
-
-  const formatSpecialistSlot = (slot) => new Intl.DateTimeFormat('ar-EG', {
-    timeZone: slot.timeZone,
-    dateStyle: 'medium',
-    timeStyle: 'short'
-  }).format(new Date(slot.startsAt));
 
   const formatAppointmentPrice = (amountMinor, currency = 'EGP') => new Intl.NumberFormat('ar-EG', {
     style: 'currency',
@@ -400,10 +441,92 @@ export default function ParentDashboard({
 
   const appointmentStatuses = {
     pending: 'بانتظار رد الأخصائي',
+    awaiting_payment: 'في انتظار الدفع',
+    payment_under_review: 'إيصال الدفع قيد المراجعة',
     accepted: 'تم تأكيد الموعد',
     rejected: 'مرفوض',
     expired: 'انتهت مهلة الرد'
   };
+  const orderedAppointments = useMemo(() => [...appointments].sort(
+    (first, second) => appointmentRequestTimestamp(second) - appointmentRequestTimestamp(first)
+  ), [appointments]);
+  const filteredAppointments = appointmentFilter === 'all'
+    ? orderedAppointments
+    : orderedAppointments.filter((appointment) => appointmentHistoryCategory(appointment) === appointmentFilter);
+  const appointmentTabs = [
+    { id: 'all', label: 'الكل' },
+    { id: 'confirmed', label: 'مؤكدة' },
+    { id: 'awaiting_payment', label: 'بانتظار الدفع' },
+    { id: 'rejected', label: 'مرفوضة' },
+    { id: 'under_review', label: 'قيد مراجعة الدفع' },
+    { id: 'pending', label: 'بانتظار رد الأخصائي' },
+    { id: 'expired', label: 'منتهية' },
+    { id: 'other', label: 'أخرى' }
+  ];
+
+  const showSessionPayment = async (appointmentId) => {
+    setSelectedSessionPaymentId(appointmentId);
+    setSessionPaymentDetails(null);
+    setPaymentReceiptFile(null);
+    setLoadingSessionPayment(true);
+    clearError();
+    try {
+      const { paymentDetails } = await apiRequest(`/api/v1/appointments/${appointmentId}/payment`);
+      setSessionPaymentDetails(paymentDetails);
+      setSelectedPaymentMethod((current) => current && paymentDetails.methods[current]
+        ? current
+        : Object.keys(paymentDetails.methods)[0] ?? '');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLoadingSessionPayment(false);
+    }
+  };
+
+  const submitSessionPayment = async (event, appointment) => {
+    event.preventDefault();
+    if (!paymentReceiptFile) {
+      setError('ارفع صورة إيصال التحويل قبل الإرسال.');
+      return;
+    }
+    if (!selectedPaymentMethod) {
+      setError('اختر طريقة الدفع أولًا.');
+      return;
+    }
+    const formData = new FormData();
+    formData.set('method', selectedPaymentMethod);
+    formData.set('receipt', paymentReceiptFile);
+    setSubmittingSessionPayment(true);
+    clearError();
+    setNotice('');
+    try {
+      const { payment } = await apiRequest(`/api/v1/appointments/${appointment.id}/payment`, {
+        method: 'POST',
+        body: formData
+      });
+      setAppointments((current) => current.map((item) => item.id === appointment.id
+        ? { ...item, status: 'payment_under_review', payment }
+        : item));
+      setSelectedSessionPaymentId('');
+      setSessionPaymentDetails(null);
+      setPaymentReceiptFile(null);
+      setNotice('تم إرسال الإيصال، والدفع الآن قيد المراجعة الإدارية.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setSubmittingSessionPayment(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!paymentReceiptFile) {
+      setPaymentReceiptPreview('');
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(paymentReceiptFile);
+    setPaymentReceiptPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [paymentReceiptFile]);
 
   useEffect(() => {
     if (!selectedChildId || !['reports', 'profile', 'progress'].includes(section)) return undefined;
@@ -864,6 +987,12 @@ export default function ParentDashboard({
     if (section === 'specialists') {
       const activeChildren = children.filter((child) => child.status === 'active');
       const selectedSpecialist = specialists.find(({ id }) => id === selectedSpecialistId);
+      const slotsByDay = (specialistAvailability?.slots ?? []).reduce((groups, slot) => {
+        const day = dateKeyInTimeZone(slot.startsAt, slot.timeZone);
+        groups[day] ??= [];
+        groups[day].push(slot);
+        return groups;
+      }, {});
       return (
         <section className="dashboard-section">
           <div className="dashboard-section-heading">
@@ -912,6 +1041,7 @@ export default function ParentDashboard({
               {selectedSpecialist?.appointmentAvailable && (
                 <section className="dashboard-section">
                   <h3>المواعيد المتاحة · {displayNameOrFallback(selectedSpecialist.displayName)}</h3>
+                  <p className="dashboard-privacy-note">تُعرض المواعيد حسب توقيت الأخصائي، ولا يظهر موعد إلا إذا كان بعد ٤٨ ساعة على الأقل. اختر التاريخ ثم الوقت المناسب.</p>
                   {activeChildren.length > 0 ? (
                     <label className="dashboard-filter">ملف الطفل
                       <select value={selectedChild?.status === 'active' ? selectedChildId : activeChildren[0].id}
@@ -922,17 +1052,28 @@ export default function ParentDashboard({
                   ) : <ProgressNotice>أضف ملف طفل نشطًا قبل طلب موعد.</ProgressNotice>}
                   {loadingAvailability ? <p className="dashboard-loading" role="status">جارٍ تحميل المواعيد المتاحة…</p>
                     : specialistAvailability?.slots?.length ? (
-                      <div className="appointment-slot-grid">
-                        {specialistAvailability.slots.map((slot) => (
-                          <article className="appointment-slot" key={slot.startsAt}>
-                            <strong>{formatSpecialistSlot(slot)}</strong>
-                            <span>{formatAppointmentPrice(slot.amountMinor, slot.currency)} · {slot.durationMinutes} دقيقة</span>
-                            <button type="button" className="button button--small button--primary"
-                              disabled={bookingAppointment || activeChildren.length === 0}
-                              onClick={() => bookAppointment(slot)}>
-                              {bookingAppointment ? 'جارٍ الإرسال…' : 'طلب موعد اختياري'}
-                            </button>
-                          </article>
+                      <div className="appointment-day-list">
+                        {Object.entries(slotsByDay).map(([day, daySlots]) => (
+                          <section className="appointment-day-group" key={day}>
+                            <h4>{formatAppointmentDate(daySlots[0].startsAt, daySlots[0].timeZone)}</h4>
+                            <div className="appointment-slot-grid">
+                              {daySlots.map((slot) => (
+                                <article className="appointment-slot" key={slot.startsAt}>
+                                  <strong className="appointment-slot__time">
+                                    <time dateTime={slot.startsAt}>
+                                      من {formatAppointmentTime(slot.startsAt, slot.timeZone)} إلى {formatAppointmentTime(slot.endsAt, slot.timeZone)}
+                                    </time>
+                                  </strong>
+                                  <span>{formatAppointmentPrice(slot.amountMinor, slot.currency)} · {slot.durationMinutes} دقيقة</span>
+                                  <button type="button" className="button button--small button--primary"
+                                    disabled={Boolean(bookingSlotStartsAt) || activeChildren.length === 0}
+                                    onClick={() => bookAppointment(slot)}>
+                                    {bookingSlotStartsAt === slot.startsAt ? 'جارٍ إرسال هذا الطلب…' : 'طلب موعد اختياري'}
+                                  </button>
+                                </article>
+                              ))}
+                            </div>
+                          </section>
                         ))}
                       </div>
                     ) : <ProgressNotice>لا توجد مواعيد متاحة خلال الأسبوعين القادمين. جرّب لاحقًا.</ProgressNotice>}
@@ -949,27 +1090,173 @@ export default function ParentDashboard({
       return (
         <section className="dashboard-section">
           <h3>طلبات وسجل المواعيد</h3>
-          <p>يمكنك طلب المواعيد أو استخدام الألعاب فقط؛ الجلسات ليست شرطًا للوصول للأنشطة التعليمية.</p>
+          <p>تظهر الطلبات من الأحدث إلى الأقدم، وتعرض كل بطاقة حالتها وتاريخ إرسالها وتفاصيل الجلسة. طلب المواعيد اختياري؛ يمكنك استخدام الألعاب دون حجز.</p>
           {loadingAppointments ? <p className="dashboard-loading" role="status">جارٍ تحميل سجل المواعيد…</p>
             : appointments.length === 0 ? <ProgressNotice>لا توجد طلبات أو مواعيد محفوظة.</ProgressNotice>
-              : <div className="specialist-appointment-list">
-                {appointments.map((appointment) => (
-                  <article className="specialist-appointment-card" key={appointment.id}>
-                    <div>
+              : <>
+                <div className="parent-appointment-tabs" role="group" aria-label="تصفية سجل المواعيد">
+                  {appointmentTabs.map((tab) => {
+                    const count = tab.id === 'all'
+                      ? orderedAppointments.length
+                      : orderedAppointments.filter((appointment) => appointmentHistoryCategory(appointment) === tab.id).length;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        aria-pressed={appointmentFilter === tab.id}
+                        className={`parent-appointment-tabs__button${appointmentFilter === tab.id ? ' is-active' : ''}`}
+                        onClick={() => setAppointmentFilter(tab.id)}
+                      >
+                        {tab.label}<span>{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {filteredAppointments.length === 0
+                  ? <ProgressNotice>لا توجد مواعيد ضمن هذه الحالة.</ProgressNotice>
+                  : <div className="parent-appointment-history">
+                {filteredAppointments.map((appointment) => (
+                  <article className="parent-appointment-card" key={appointment.id}>
+                    <header className="parent-appointment-card__header">
                       <div className="parent-appointment-specialist">
                         {appointment.specialistProfilePhotoUrl && (
                           <img src={getApiUrl(appointment.specialistProfilePhotoUrl)} alt="" loading="lazy" />
                         )}
-                        <h4>{displayNameOrFallback(appointment.specialistName)} · {appointment.childName || 'ملف طفل'}</h4>
+                        <div>
+                          <h4>{displayNameOrFallback(appointment.specialistName)}</h4>
+                          <p>للطفل: {appointment.childName || 'ملف طفل'}</p>
+                        </div>
                       </div>
-                      <time dateTime={appointment.startsAt}>{new Intl.DateTimeFormat('ar-EG', {
-                        timeZone: appointment.timeZone, dateStyle: 'medium', timeStyle: 'short'
-                      }).format(new Date(appointment.startsAt))}</time>
-                      <p>{appointment.durationMinutes} دقيقة · {formatAppointmentPrice(appointment.amountMinor, appointment.currency)}</p>
-                      <span className={`appointment-status appointment-status--${appointment.status}`}>
-                        {appointmentStatuses[appointment.status]}
-                      </span>
-                      {appointment.status === 'pending' && <p>ينتهي طلب الموعد في {formatDate(appointment.expiresAt)} إذا لم يرد الأخصائي.</p>}
+                      <div className="parent-appointment-card__summary">
+                        <span className={`appointment-status appointment-status--${appointment.status}`}>
+                          {appointmentStatuses[appointment.status] ?? 'حالة غير محددة'}
+                        </span>
+                        <span className="parent-appointment-card__requested">
+                          <strong>تاريخ إرسال الطلب</strong>
+                          <time dateTime={appointment.requestedAt || undefined}>
+                            {formatDate(appointment.requestedAt)}
+                          </time>
+                        </span>
+                      </div>
+                    </header>
+                    <div className="parent-appointment-card__content">
+                      <div className="appointment-session-time">
+                        <strong>تاريخ ووقت الجلسة</strong>
+                        <time dateTime={appointment.startsAt}>
+                          {formatAppointmentDate(appointment.startsAt, appointment.timeZone)}
+                          {' · من '}{formatAppointmentTime(appointment.startsAt, appointment.timeZone)}
+                          {' إلى '}{formatAppointmentTime(appointment.endsAt, appointment.timeZone)}
+                        </time>
+                        <small>حسب توقيت الأخصائي</small>
+                      </div>
+                      <p className="parent-appointment-card__price">
+                        <span>مدة الجلسة</span><strong>{appointment.durationMinutes} دقيقة</strong>
+                        <span>قيمة الموعد</span><strong>{formatAppointmentPrice(appointment.amountMinor, appointment.currency)}</strong>
+                      </p>
+                      {appointment.payment?.status === 'pending_verification' && (
+                        <div className="session-payment-state" role="status">
+                          <strong>تم إرسال إيصال الدفع · قيد المراجعة الإدارية</strong>
+                          <p>أرسل في {formatDate(appointment.payment.submittedAt)}. ستُحدّث حالة الموعد بعد مراجعة الإيصال.</p>
+                          {appointment.payment.receiptAvailable && (
+                            <img
+                              className="session-payment-receipt-preview"
+                              src={getApiUrl(`/api/v1/appointments/${appointment.id}/payment/receipt`)}
+                              alt="صورة إيصال الدفع المرسل"
+                              loading="lazy"
+                            />
+                          )}
+                        </div>
+                      )}
+                      {appointment.payment?.status === 'approved' && (
+                        <p className="auth-message" role="status">تم اعتماد الدفع وتأكيد الجلسة.</p>
+                      )}
+                      {['awaiting_payment', 'rejected'].includes(appointment.payment?.status) && (
+                        <section className="session-payment-panel">
+                          <h5>{appointment.payment.status === 'rejected' ? 'يلزم إرسال إيصال جديد' : 'الدفع مطلوب لتأكيد الجلسة'}</h5>
+                          <p>
+                            المبلغ المستحق: <strong>{formatAppointmentPrice(appointment.payment.amountMinor, appointment.payment.currency)}</strong>
+                          </p>
+                          <p>آخر موعد للدفع: {formatAppointmentDate(appointment.payment.deadline, appointment.timeZone)} · {formatAppointmentTime(appointment.payment.deadline, appointment.timeZone)}</p>
+                          {appointment.payment.rejectionReason && (
+                            <p className="appointment-request-deadline">
+                              <strong>سبب رفض الإيصال السابق: </strong>{appointment.payment.rejectionReason}
+                            </p>
+                          )}
+                          {appointment.payment.receiptAvailable && (
+                            <img
+                              className="session-payment-receipt-preview"
+                              src={getApiUrl(`/api/v1/appointments/${appointment.id}/payment/receipt`)}
+                              alt="صورة الإيصال السابق"
+                              loading="lazy"
+                            />
+                          )}
+                          {selectedSessionPaymentId === appointment.id ? (
+                            <div className="session-payment-panel__form">
+                              {loadingSessionPayment ? <p className="dashboard-loading" role="status">جارٍ تحميل تعليمات الدفع…</p>
+                                : sessionPaymentDetails ? (
+                                  <form className="auth-form" onSubmit={(event) => submitSessionPayment(event, appointment)}>
+                                    {Object.keys(sessionPaymentDetails.methods).length > 0 ? (
+                                      <>
+                                        <label>طريقة الدفع
+                                          <select required value={selectedPaymentMethod}
+                                            onChange={(event) => setSelectedPaymentMethod(event.target.value)}>
+                                            {Object.entries(sessionPaymentDetails.methods).map(([key, config]) => (
+                                              <option key={key} value={key}>{config.label}</option>
+                                            ))}
+                                          </select>
+                                        </label>
+                                        {sessionPaymentDetails.methods[selectedPaymentMethod] && (
+                                          <div className="session-payment-instructions">
+                                            <strong>{sessionPaymentDetails.methods[selectedPaymentMethod].label}</strong>
+                                            <bdi dir="ltr">{sessionPaymentDetails.methods[selectedPaymentMethod].recipient}</bdi>
+                                            <p>{sessionPaymentDetails.methods[selectedPaymentMethod].instructions}</p>
+                                            <button type="button" className="button button--small button--outline"
+                                              onClick={() => navigator.clipboard.writeText(sessionPaymentDetails.methods[selectedPaymentMethod].recipient)
+                                                .then(() => setNotice('تم نسخ بيانات الاستلام.'))
+                                                .catch(() => setError('تعذر نسخ البيانات. يمكنك تحديدها ونسخها يدويًا.'))}>
+                                              نسخ بيانات الاستلام
+                                            </button>
+                                          </div>
+                                        )}
+                                        <label>صورة إيصال التحويل (PNG أو JPG أو WebP، حتى ٥ ميجابايت)
+                                          <input type="file" accept="image/png,image/jpeg,image/webp" required
+                                            onChange={(event) => setPaymentReceiptFile(event.target.files?.[0] ?? null)} />
+                                        </label>
+                                        {paymentReceiptPreview && (
+                                          <img className="session-payment-receipt-preview"
+                                            src={paymentReceiptPreview} alt="معاينة الإيصال قبل الإرسال" />
+                                        )}
+                                        <label className="dashboard-checkbox">
+                                          <input type="checkbox" required />
+                                          أؤكد أنني أرسلت المبلغ الموضح وأرفقت صورة الإيصال الصحيحة.
+                                        </label>
+                                        <button type="submit" className="button button--primary"
+                                          disabled={submittingSessionPayment || !paymentReceiptFile}>
+                                          {submittingSessionPayment ? 'جارٍ إرسال الإيصال…' : 'إرسال الإيصال للمراجعة'}
+                                        </button>
+                                      </>
+                                    ) : <p className="dashboard-empty-state">طرق الدفع غير متاحة حاليًا. يرجى التواصل مع الإدارة.</p>}
+                                  </form>
+                                ) : null}
+                            </div>
+                          ) : (
+                            <button type="button" className="button button--primary"
+                              onClick={() => void showSessionPayment(appointment.id)}>
+                              {appointment.payment.status === 'rejected' ? 'إرسال إيصال مصحح' : 'عرض تعليمات الدفع'}
+                            </button>
+                          )}
+                        </section>
+                      )}
+                      {appointment.status === 'pending' && (
+                        <p className="appointment-request-deadline">
+                          <strong>آخر موعد لرد الأخصائي: </strong>
+                          <time dateTime={appointment.expiresAt}>
+                            {formatAppointmentDate(appointment.expiresAt, appointment.timeZone)}
+                            {' · '}{formatAppointmentTime(appointment.expiresAt, appointment.timeZone)}
+                          </time>
+                          <small>ينتهي الطلب عند موعد الجلسة أو بعد ٤٨ ساعة من إرساله، أيهما أقرب.</small>
+                        </p>
+                      )}
                       {appointment.decisionNote && <p>ملاحظة الأخصائي: {appointment.decisionNote}</p>}
                       {appointment.status === 'accepted' && (
                         <p>حالة الجلسة: {{
@@ -991,7 +1278,7 @@ export default function ParentDashboard({
                       {appointment.status === 'accepted' && (
                         <>
                           <p className="dashboard-privacy-note">
-                            موعد الجلسة: {formatDate(appointment.startsAt)} · الأخصائي: {appointment.specialistName || 'غير متاح'}
+                            الأخصائي: {appointment.specialistName || 'غير متاح'}
                           </p>
                           <p className="dashboard-privacy-note">
                             حالة الجلسة المرئية: {appointment.meetingStatus === 'live' ? 'جارية'
@@ -1021,7 +1308,8 @@ export default function ParentDashboard({
                     </div>
                   </article>
                 ))}
-              </div>}
+                  </div>}
+              </>}
         </section>
       );
     }

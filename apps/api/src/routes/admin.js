@@ -26,6 +26,10 @@ import {
 import {
   paymentDecisionSchema,
   paymentRequestParamsSchema,
+  adminSessionPaymentQuerySchema,
+  sessionPaymentDecisionSchema,
+  sessionPaymentParamsSchema,
+  sessionPaymentSettingsSchema,
   subscriptionSettingsSchema
 } from '../validation/payments.js';
 import { sendAsset } from './media.js';
@@ -94,7 +98,8 @@ export function createAdminRouter({
   platformSettingsService,
   testimonialService,
   appointmentService,
-  adminVideoTestService
+  adminVideoTestService,
+  sessionPaymentService
 }) {
   const router = Router();
   router.use(authenticationMiddleware, requireAuthentication, requireApprovedAccount, requireRole('admin'), requireCsrf);
@@ -287,6 +292,42 @@ export function createAdminRouter({
     router.get('/payments/:paymentId/receipt', validate(paymentRequestParamsSchema, 'params'), async (request, response, next) => {
       try {
         const receipt = await subscriptionService.readAdminReceipt(request.params.paymentId);
+        sendPrivateReceipt(response, receipt);
+      } catch (error) {
+        next(error);
+      }
+    });
+  }
+
+  if (sessionPaymentService) {
+    router.get('/session-payment-settings', async (_request, response) => {
+      response.json({ settings: await sessionPaymentService.getAdminSettings() });
+    });
+    router.put('/session-payment-settings', validate(sessionPaymentSettingsSchema), async (request, response) => {
+      response.json({
+        settings: await sessionPaymentService.updateAdminSettings(
+          request.authenticated.user,
+          request.body
+        )
+      });
+    });
+    router.get('/session-payments', validate(adminSessionPaymentQuerySchema, 'query'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json(await sessionPaymentService.listAdminPayments(request.validatedQuery));
+    });
+    router.post('/session-payments/:appointmentId/review',
+      validate(sessionPaymentParamsSchema, 'params'),
+      validate(sessionPaymentDecisionSchema),
+      async (request, response) => {
+        response.json(await sessionPaymentService.reviewPayment(
+          request.authenticated.user,
+          request.params.appointmentId,
+          request.body
+        ));
+      });
+    router.get('/session-payments/:appointmentId/receipt', validate(sessionPaymentParamsSchema, 'params'), async (request, response, next) => {
+      try {
+        const receipt = await sessionPaymentService.readAdminReceipt(request.params.appointmentId);
         sendPrivateReceipt(response, receipt);
       } catch (error) {
         next(error);

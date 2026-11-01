@@ -1539,7 +1539,7 @@ test('video service tests are admin-only, temporary, independently recorded, and
   assert.equal(Object.hasOwn(historyRecord, 'secondParticipantTokenHash'), false);
 });
 
-test('specialist schedules reserve overlapping slots atomically and appointments expire after 48 hours', async () => {
+test('specialist schedules reserve overlapping slots atomically and requests expire by the session start or after 48 hours', async () => {
   const startingNow = new Date();
   appointmentNow = startingNow;
   const parent = await createApprovedParent('appointment-parent@harf.test');
@@ -1598,6 +1598,19 @@ test('specialist schedules reserve overlapping slots atomically and appointments
   assert.equal((await request('/appointments', { method: 'POST', cookie: parent.cookie, csrfToken: parent.csrfToken, body: {
     childId: otherChild.id, specialistId: specialist.user._id, startsAt: start.toISOString()
   } })).status, 404);
+  appointmentNow = new Date(start.getTime() - 47 * 60 * 60 * 1000);
+  const tooSoonAvailability = await request(`/directory/specialists/${specialist.user._id}/availability?from=${encodeURIComponent(appointmentNow.toISOString())}&days=14`);
+  assert.equal((await tooSoonAvailability.json()).availability.slots
+    .some((slot) => slot.startsAt === start.toISOString()), false);
+  const tooSoonBooking = await request('/appointments', {
+    method: 'POST',
+    cookie: parent.cookie,
+    csrfToken: parent.csrfToken,
+    body: { childId: child.id, specialistId: specialist.user._id, startsAt: start.toISOString() }
+  });
+  assert.equal(tooSoonBooking.status, 409);
+  assert.equal((await tooSoonBooking.json()).error.code, 'APPOINTMENT_SLOT_UNAVAILABLE');
+  appointmentNow = new Date(start.getTime() - 49 * 60 * 60 * 1000);
   const bookingBody = { childId: child.id, specialistId: specialist.user._id, startsAt: start.toISOString() };
   const concurrentBookings = await Promise.all([
     request('/appointments', { method: 'POST', cookie: parent.cookie, csrfToken: parent.csrfToken, body: bookingBody }),
@@ -1612,6 +1625,7 @@ test('specialist schedules reserve overlapping slots atomically and appointments
   assert.equal(booked.amountMinor, 30000);
   assert.equal(booked.durationMinutes, 30);
   assert.equal(booked.status, 'pending');
+  assert.equal(new Date(booked.expiresAt).getTime(), new Date(booked.requestedAt).getTime() + 48 * 60 * 60 * 1000);
   assert.equal(new Date(booked.expiresAt).getTime() - new Date(booked.requestedAt).getTime(), 48 * 60 * 60 * 1000);
   const changedSchedule = await request('/specialist/availability', {
     method: 'PUT',
@@ -1899,6 +1913,7 @@ test('specialist schedules reserve overlapping slots atomically and appointments
     body: { childId: appointmentChildId, specialistId: specialist.user._id, startsAt: expiryStart.toISOString() }
   });
   const expiringAppointment = (await expiringResponse.json()).appointment;
+  assert.equal(new Date(expiringAppointment.expiresAt).getTime() - new Date(expiringAppointment.requestedAt).getTime(), 48 * 60 * 60 * 1000);
   appointmentNow = new Date(sessionStart.getTime() + 49 * 60 * 60 * 1000);
   const expiredRead = await request(`/appointments/${expiringAppointment.id}`, { cookie: appointmentOwner.cookie });
   assert.equal((await expiredRead.json()).appointment.status, 'expired');

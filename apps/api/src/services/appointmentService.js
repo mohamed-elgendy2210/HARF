@@ -13,6 +13,7 @@ import { hasSpecialistVerificationDocuments, isProfessionalProfileComplete } fro
 import { isReadableName } from '../lib/nameValidation.js';
 
 const APPOINTMENT_REQUEST_LIFETIME_MS = 48 * 60 * 60 * 1000;
+const MINIMUM_APPOINTMENT_NOTICE_MS = 48 * 60 * 60 * 1000;
 
 function idOf(record) {
   if (record && typeof record.toHexString === 'function') return record.toHexString();
@@ -85,7 +86,27 @@ function serializeAppointment(record, viewerRole) {
     sessionStartedAt: record.sessionStartedAt ?? null,
     sessionEndedAt: record.sessionEndedAt ?? null,
     meetingStatus: record.meeting?.status ?? (record.meetingProvisioningFailedAt ? 'failed' : null),
-    meetingAvailable: Boolean(record.meeting?.roomName)
+    meetingAvailable: Boolean(record.meeting?.roomName),
+    ...(record.payment ? { payment: viewerRole === 'specialist'
+      ? { status: record.payment.status }
+      : {
+        status: record.payment.status,
+        amountMinor: record.payment.amountMinor,
+        currency: record.payment.currency,
+        deadline: record.payment.deadline ?? null,
+        method: record.payment.method ?? null,
+        submittedAt: record.payment.submittedAt ?? null,
+        receiptAvailable: Boolean(record.payment.receipt?.storageName),
+        rejectionReason: record.payment.rejectionReason ?? '',
+        history: (record.payment.history ?? []).map((item) => ({
+          status: item.status,
+          method: item.method,
+          submittedAt: item.submittedAt,
+          reviewedAt: item.reviewedAt,
+          decisionNote: item.decisionNote ?? '',
+          receiptAvailable: Boolean(item.receipt?.storageName)
+        }))
+      } } : {})
   };
   if (viewerRole === 'parent' && record.parentProgressReport?.createdAt) {
     appointment.parentProgressReport = {
@@ -110,6 +131,8 @@ export class AppointmentService {
     childService,
     videoProviderService,
     notificationService,
+    sessionPaymentRepository,
+    paymentRepository,
     logger,
     specialistDocumentService,
     meetingRules = {},
@@ -120,6 +143,8 @@ export class AppointmentService {
     this.childService = childService;
     this.videoProviderService = videoProviderService;
     this.notificationService = notificationService;
+    this.sessionPaymentRepository = sessionPaymentRepository;
+    this.paymentRepository = paymentRepository;
     this.logger = logger;
     this.specialistDocumentService = specialistDocumentService;
     this.meetingRules = {
@@ -135,7 +160,27 @@ export class AppointmentService {
     if (this.expiryTimer) return;
     const expire = async () => {
       try {
-        await this.repository.expirePending(this.now());
+        const now = this.now();
+        const expiredPayments = await this.repository.listExpiredPaymentAppointments?.(now) ?? [];
+        await this.repository.expirePending(now);
+        for (const candidate of expiredPayments) {
+          const appointment = await this.repository.claimExpiredPaymentNotification?.(candidate._id, now);
+          if (!appointment) continue;
+          await this.notify(appointment.parentUserId, {
+            type: 'appointment_decision',
+            title: 'انتهت مهلة الدفع',
+            message: 'انتهت مهلة دفع الجلسة وتم تحرير الموعد. يمكنك اختيار موعد آخر.',
+            resourceType: 'appointment',
+            resourceId: idOf(appointment)
+          });
+          await this.notify(appointment.specialistUserId, {
+            type: 'appointment_decision',
+            title: 'انتهت مهلة دفع الموعد',
+            message: 'انتهت مهلة الدفع لطلب الموعد وتم تحرير الوقت المتاح.',
+            resourceType: 'appointment',
+            resourceId: idOf(appointment)
+          });
+        }
       } catch (error) {
         this.logger.error({ error }, 'Pending appointment expiration failed.');
       }
@@ -247,7 +292,9 @@ export class AppointmentService {
         for (let startMinute = startLimit; startMinute + availability.appointmentDurationMinutes <= endLimit; startMinute += 15) {
           const startClock = `${String(Math.floor(startMinute / 60)).padStart(2, '0')}:${String(startMinute % 60).padStart(2, '0')}`;
           const startsAt = localDateTimeToUtc(date, startClock, availability.timeZone);
-          if (!startsAt || startsAt < now || startsAt < rangeStart) continue;
+          if (!startsAt
+            || startsAt.getTime() < now.getTime() + MINIMUM_APPOINTMENT_NOTICE_MS
+            || startsAt < rangeStart) continue;
           const keys = reservationKeys(startsAt, availability.appointmentDurationMinutes);
           if (!keys || keys.some((key) => reservedKeys.has(key.getTime()))) continue;
           slots.push({
@@ -299,7 +346,10 @@ export class AppointmentService {
         currency: slot.currency,
         status: 'pending',
         requestedAt,
-        expiresAt: new Date(requestedAt.getTime() + APPOINTMENT_REQUEST_LIFETIME_MS),
+        expiresAt: new Date(Math.min(
+          requestedAt.getTime() + APPOINTMENT_REQUEST_LIFETIME_MS,
+          new Date(slot.startsAt).getTime()
+        )),
         slotReserved: true,
         reservationKeys: keys
       });
@@ -441,17 +491,72 @@ export class AppointmentService {
     const specialistId = idOf(specialist);
     const now = this.now();
     await this.repository.expirePending(now, specialistId);
+    let payment = null;
+    let nextStatus = decision;
+    if (decision === 'accepted' && (this.sessionPaymentRepository || this.paymentRepository)) {
+      if (!this.sessionPaymentRepository || !this.paymentRepository) {
+        throw new AppError(503, 'SESSION_PAYMENT_NOT_CONFIGURED', 'إعدادات دفع الجلسات غير مكتملة. تواصل مع الإدارة.');
+      }
+      const sessionSettings = await this.sessionPaymentRepository.getSettings();
+      const receivingSettings = await this.paymentRepository.getSettings();
+      if (!sessionSettings?.enabled
+        || ![receivingSettings?.vodafoneCash?.enabled, receivingSettings?.instaPay?.enabled].some(Boolean)) {
+        throw new AppError(409, 'SESSION_PAYMENT_NOT_CONFIGURED', 'لم يتم تفعيل مدفوعات الجلسات أو طرق الاستلام بعد.');
+      }
+      const ownedAppointment = await this.repository.findOwnedAppointment(
+        appointmentId,
+        'specialistUserId',
+        specialistId
+      );
+      if (!ownedAppointment || ownedAppointment.status !== 'pending') {
+        throw new AppError(409, 'APPOINTMENT_ALREADY_DECIDED', 'طلب الموعد لم يعد بانتظار قرار الأخصائي.');
+      }
+      if (!Number.isInteger(ownedAppointment.amountMinor) || ownedAppointment.amountMinor < 100
+        || ownedAppointment.currency !== 'EGP') {
+        throw new AppError(409, 'INVALID_SESSION_PRICE', 'تعذر تحديد سعر صالح لهذه الجلسة. تواصل مع الإدارة.');
+      }
+      const deadline = new Date(Math.min(
+        now.getTime() + sessionSettings.paymentDeadlineHours * 60 * 60 * 1000,
+        new Date(ownedAppointment.startsAt).getTime()
+      ));
+      if (deadline <= now) throw new AppError(409, 'PAYMENT_DEADLINE_PASSED', 'انتهى موعد الدفع لهذه الجلسة.');
+      const methods = {};
+      if (receivingSettings.vodafoneCash.enabled) {
+        methods.vodafone_cash = {
+          label: 'Vodafone Cash',
+          recipient: receivingSettings.vodafoneCash.recipient,
+          instructions: receivingSettings.vodafoneCash.instructions
+        };
+      }
+      if (receivingSettings.instaPay.enabled) {
+        methods.instapay = {
+          label: 'InstaPay',
+          recipient: receivingSettings.instaPay.recipient,
+          instructions: receivingSettings.instaPay.instructions
+        };
+      }
+      nextStatus = 'awaiting_payment';
+      payment = {
+        status: 'awaiting_payment',
+        amountMinor: ownedAppointment.amountMinor,
+        currency: ownedAppointment.currency,
+        deadline,
+        methods,
+        history: []
+      };
+    }
     const updated = await this.repository.decideAppointment(
       appointmentId,
       specialistId,
-      decision,
+      nextStatus,
       now,
-      decisionNote
+      decisionNote,
+      payment
     );
     if (!updated) {
       const owned = await this.repository.findOwnedAppointment(appointmentId, 'specialistUserId', specialistId);
       if (!owned) throw new AppError(404, 'APPOINTMENT_NOT_FOUND', 'The appointment was not found.');
-      if (decision === 'accepted' && owned.status === 'accepted') {
+      if (decision === 'accepted' && !this.sessionPaymentRepository && owned.status === 'accepted') {
         if (new Date(owned.startsAt).getTime() <= now.getTime()) {
           return this.serializeForViewer(owned, 'specialist');
         }
@@ -469,24 +574,38 @@ export class AppointmentService {
       decisionNote
     });
     let appointment = updated;
-    if (decision === 'accepted' && this.videoProviderService?.isConfigured()
+    if (decision === 'accepted' && !payment && this.videoProviderService?.isConfigured()
       && new Date(updated.startsAt).getTime() > now.getTime()) {
       const ensured = await this.ensureMeeting(updated, specialistId, { allowPast: false });
       appointment = ensured.appointment;
       if (ensured.created) await this.notifyMeetingReady(appointment);
     }
-    if (decision !== 'accepted' || !appointment.meeting?.roomName) {
+    if (decision !== 'accepted' || payment || !appointment.meeting?.roomName) {
       await this.notify(updated.parentUserId, {
         type: 'appointment_decision',
-        title: decision === 'accepted' ? 'تم تأكيد الموعد' : 'تم رفض طلب الموعد',
+        title: decision === 'accepted'
+          ? payment ? 'وافق الأخصائي على طلب الجلسة' : 'تم تأكيد الموعد'
+          : 'تم رفض طلب الموعد',
         message: decision === 'accepted'
-          ? 'وافق الأخصائي على طلب الموعد.'
+          ? payment
+            ? 'وافق الأخصائي على طلبك. أرسل قيمة الجلسة من تفاصيل الموعد لتأكيد الحجز.'
+            : 'وافق الأخصائي على طلب الموعد.'
           : 'لم يتم قبول طلب الموعد. يمكنك اختيار موعد آخر.',
         resourceType: 'appointment',
         resourceId: appointmentId
       });
     }
     return this.serializeForViewer(appointment, 'specialist');
+  }
+
+  async activatePaidAppointment(administrator, appointmentId) {
+    const appointment = await this.repository.findAdminAppointment(appointmentId);
+    if (!appointment || appointment.status !== 'accepted' || appointment.payment?.status !== 'approved') {
+      throw new AppError(409, 'APPOINTMENT_PAYMENT_NOT_APPROVED', 'لا يمكن تفعيل الجلسة قبل اعتماد الدفع.');
+    }
+    if (new Date(appointment.startsAt).getTime() <= this.now().getTime()) return appointment;
+    const ensured = await this.ensureMeeting(appointment, idOf(appointment.specialistUserId), { allowPast: false });
+    return ensured.appointment;
   }
 
   async startSession(specialist, appointmentId) {

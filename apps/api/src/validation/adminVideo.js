@@ -9,7 +9,7 @@ export const adminAppointmentQuerySchema = z.object({
   search: z.string().trim().max(80).default(''),
   from: date.optional(),
   to: date.optional(),
-  bookingStatus: z.enum(['all', 'pending', 'accepted', 'rejected', 'expired']).default('accepted'),
+  bookingStatus: z.enum(['all', 'pending', 'awaiting_payment', 'payment_under_review', 'accepted', 'rejected', 'expired']).default('accepted'),
   meetingStatus: z.enum(['all', 'missing', 'scheduled', 'live', 'ended', 'cancelled', 'failed']).default('all')
 }).strict().refine((value) => !value.from || !value.to || value.from <= value.to, {
   message: 'Date range is inverted.'

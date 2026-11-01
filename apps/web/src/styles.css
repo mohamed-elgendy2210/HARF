@@ -1454,12 +1454,25 @@ summary:focus-visible {
 
 .specialist-appointment-list {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
 .specialist-appointment-card {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (max-width: 1050px) {
+  .specialist-appointment-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .specialist-appointment-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 .specialist-appointment-card h4,
@@ -10433,4 +10446,632 @@ summary:focus-visible {
 
 :is(button:disabled, input[type='button']:disabled, input[type='submit']:disabled, input[type='reset']:disabled) {
   cursor: not-allowed;
+}
+
+.appointment-day-list {
+  display: grid;
+  gap: 18px;
+}
+
+.appointment-day-group {
+  display: grid;
+  gap: 10px;
+}
+
+.appointment-day-group > h4 {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--blue);
+  background: #f0f3ff;
+  font-size: 15px;
+}
+
+.appointment-slot__time {
+  color: var(--ink);
+  font-size: 15px;
+}
+
+.appointment-session-time,
+.appointment-request-deadline {
+  display: grid;
+  gap: 4px;
+}
+
+.parent-appointment-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+  padding: 2px 1px 8px;
+  scrollbar-width: thin;
+}
+
+.parent-appointment-tabs__button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px;
+  border: 1px solid #e2e8fb;
+  border-radius: 999px;
+  color: var(--muted);
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: var(--font-weight-bold);
+}
+
+.parent-appointment-tabs__button span {
+  display: grid;
+  min-width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  color: inherit;
+  background: #f0f3ff;
+  font-size: 11px;
+}
+
+.parent-appointment-tabs__button.is-active {
+  border-color: var(--blue);
+  color: #fff;
+  background: var(--blue);
+}
+
+.parent-appointment-tabs__button.is-active span {
+  color: var(--blue);
+  background: #fff;
+}
+
+.parent-appointment-history {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.parent-appointment-card {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid #e2e8fb;
+  border-radius: 17px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgb(42 57 112 / 6%);
+}
+
+.parent-appointment-card__header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #edf0fa;
+}
+
+.parent-appointment-specialist p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.parent-appointment-card__summary {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.parent-appointment-card__requested {
+  display: grid;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: end;
+}
+
+.parent-appointment-card__requested strong {
+  color: var(--ink);
+}
+
+.parent-appointment-card__content {
+  display: grid;
+  gap: 12px;
+}
+
+.parent-appointment-card__price {
+  display: grid;
+  grid-template-columns: auto auto;
+  justify-content: start;
+  gap: 4px 14px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.parent-appointment-card__price strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+@media (max-width: 1050px) {
+  .parent-appointment-history {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.appointment-session-time {
+  padding: 10px 12px;
+  border-inline-start: 3px solid var(--blue);
+  border-radius: 8px;
+  background: #f7f8ff;
+}
+
+@media (max-width: 600px) {
+  .parent-appointment-card {
+    padding: 14px;
+  }
+
+  .parent-appointment-card__header {
+    flex-direction: column;
+  }
+
+  .parent-appointment-card__summary {
+    justify-items: start;
+  }
+
+  .parent-appointment-history {
+    grid-template-columns: 1fr;
+  }
+
+  .parent-appointment-card__requested {
+    text-align: start;
+  }
+}
+
+.appointment-session-time > strong,
+.appointment-request-deadline > strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.appointment-session-time > time,
+.appointment-request-deadline > time {
+  color: var(--blue);
+  font-weight: var(--font-weight-bold);
+}
+
+.appointment-session-time > small,
+.appointment-request-deadline > small {
+  color: var(--muted);
+}
+
+.session-payment-panel,
+.session-payment-state,
+.admin-session-payments__settings,
+.admin-session-payment-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #e5eaff;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.session-payment-panel > h5,
+.admin-session-payments__settings > h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.session-payment-panel > p,
+.session-payment-state > p {
+  margin: 0;
+}
+
+.session-payment-panel__form {
+  display: grid;
+  gap: 12px;
+}
+
+.session-payment-instructions {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f0f3ff;
+}
+
+.session-payment-instructions > bdi {
+  width: fit-content;
+  font-size: 18px;
+  font-weight: var(--font-weight-bold);
+}
+
+.session-payment-instructions > p {
+  margin: 0;
+}
+
+.session-payment-receipt-preview {
+  display: block;
+  width: min(100%, 360px);
+  max-height: 360px;
+  object-fit: contain;
+  border: 1px solid #dfe5fa;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.admin-session-payments {
+  display: grid;
+  gap: 20px;
+}
+
+.admin-session-payments__settings {
+  padding: 0;
+  overflow: hidden;
+}
+
+.admin-session-payments__settings > summary {
+  padding: 13px 15px;
+  color: var(--ink);
+  font-weight: var(--font-weight-bold);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.admin-session-payments__settings[open] > summary {
+  border-bottom: 1px solid #e5eaff;
+}
+
+.admin-session-payments__settings > form {
+  display: grid;
+  max-width: 720px;
+  gap: 12px;
+  padding: 15px;
+}
+
+.admin-session-payments__settings > form > p {
+  margin: 0;
+}
+
+.admin-session-payments__heading-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-session-payments__feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 15px;
+  border: 1px solid #bce7da;
+  border-radius: 12px;
+  color: #146b59;
+  background: #e9faf5;
+}
+
+.admin-session-payments__feedback > span {
+  display: grid;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 50%;
+  color: #fff;
+  background: #16856d;
+  font-weight: var(--font-weight-bold);
+}
+
+.admin-session-payments__feedback p {
+  margin: 0;
+}
+
+.admin-session-payments__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.admin-session-payments__stat {
+  display: grid;
+  justify-items: start;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #e5eaff;
+  border-radius: 12px;
+  color: var(--muted);
+  background: #f8f9ff;
+  text-align: start;
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.admin-session-payments__stat:hover,
+.admin-session-payments__stat.is-active {
+  border-color: var(--blue);
+  background: #f0f3ff;
+  box-shadow: 0 0 0 2px rgb(59 76 202 / 8%);
+}
+
+.admin-session-payments__stat.is-active {
+  color: var(--blue);
+}
+
+.admin-session-payments__stat strong {
+  color: var(--blue);
+  font-size: 22px;
+}
+
+.admin-session-payments__filters {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) repeat(4, minmax(140px, 1fr));
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #e2e8fb;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #f8f9ff 0%, #fff 75%);
+  box-shadow: 0 6px 20px rgb(39 61 168 / 5%);
+}
+
+.admin-session-payments__filters-heading {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e8ecf8;
+}
+
+.admin-session-payments__filters-heading h3,
+.admin-session-payments__filters-heading p {
+  margin: 0;
+}
+
+.admin-session-payments__filters-heading h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 16px;
+}
+
+.admin-session-payments__filters-heading h3::before {
+  width: 4px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--teal);
+  content: '';
+}
+
+.admin-session-payments__filters-heading p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-session-payments__filters > label,
+.admin-session-payment-card__actions > label {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  color: #53618c;
+  font-size: 12px;
+  font-weight: var(--font-weight-bold);
+}
+
+.admin-session-payments__filters > label > input,
+.admin-session-payments__filters > label > select {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 11px;
+  border: 1px solid #dfe5f5;
+  border-radius: 10px;
+  outline: none;
+  color: var(--ink);
+  background-color: #fff;
+  box-shadow: 0 2px 5px rgb(39 61 168 / 3%);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.admin-session-payments__filters > label > input::placeholder {
+  color: #9aa4c4;
+  font-weight: var(--font-weight-regular);
+}
+
+.admin-session-payments__filters > label > input:focus,
+.admin-session-payments__filters > label > select:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgb(59 76 202 / 12%);
+}
+
+.admin-session-payments__filters > .admin-session-payments__search {
+  grid-column: span 2;
+}
+
+.admin-session-payments__active-filters {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.admin-session-payments__active-filters > strong {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-session-payments__active-filters > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  padding: 4px 9px;
+  border: 1px solid #dce5fb;
+  border-radius: 999px;
+  color: var(--blue);
+  background: #fff;
+  font-size: 11px;
+}
+
+.admin-session-payments__active-filters > button:hover {
+  border-color: var(--blue);
+  background: #f0f3ff;
+}
+
+.admin-session-payments__active-filters > button span {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.admin-session-payment-card__actions > label {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-session-payments__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-session-payments__results {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-session-payment-card > header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.admin-session-payment-card > header > div {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-session-payment-card__amount {
+  color: var(--blue);
+  font-size: 20px;
+}
+
+.admin-session-payment-card > dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.admin-session-payment-card > dl > div {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: #f8f9ff;
+}
+
+.admin-session-payment-card dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-session-payment-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.admin-session-payment-card__receipt {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  width: fit-content;
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.admin-session-payment-card__receipt img {
+  width: min(100%, 220px);
+  max-height: 180px;
+  object-fit: contain;
+  border: 1px solid #dfe5fa;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.admin-session-payment-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+
+.admin-session-payment-card__review-hint {
+  margin: 0;
+  color: #78540b;
+  font-size: 13px;
+}
+
+.admin-session-payment-card__actions > label {
+  flex: 1 1 240px;
+}
+
+@media (max-width: 850px) {
+  .admin-session-payments__filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-session-payments__filters > .admin-session-payments__search {
+    grid-column: 1 / -1;
+  }
+
+  .admin-session-payments__list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-session-payments__filters {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .admin-session-payments__filters > .admin-session-payments__search {
+    grid-column: auto;
+  }
+
+  .admin-session-payments__filters-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .admin-session-payment-card > header {
+    flex-direction: column;
+  }
+
+  .admin-session-payment-card > dl {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-session-payment-card__actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
+.appointment-request-deadline {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff8e6;
 }

@@ -33,6 +33,8 @@ import { createTestimonialRepository, ensureTestimonialIndexes } from './db/test
 import { TestimonialService } from './services/testimonialService.js';
 import { createAdminVideoTestRepository, ensureAdminVideoTestIndexes } from './db/adminVideoTestRepository.js';
 import { AdminVideoTestService } from './services/adminVideoTestService.js';
+import { createSessionPaymentRepository, ensureSessionPaymentIndexes } from './db/sessionPaymentRepository.js';
+import { SessionPaymentService } from './services/sessionPaymentService.js';
 
 const logger = createLogger({ level: config.logLevel, isProduction: config.isProduction });
 
@@ -50,7 +52,8 @@ async function start() {
       ensureNotificationIndexes(),
       ensurePlatformSettingsIndexes(),
       ensureTestimonialIndexes(),
-      ensureAdminVideoTestIndexes()
+      ensureAdminVideoTestIndexes(),
+      ensureSessionPaymentIndexes()
     ]);
     await seedGameLibrary();
     await seedLearningPath();
@@ -79,12 +82,17 @@ async function start() {
   const videoProviderService = new VideoProviderService({
     adapter: new JitsiIframeAdapter({ domain: config.jitsi.domain })
   });
+  const appointmentRepository = createAppointmentRepository();
+  const paymentRepository = createPaymentRepository();
+  const sessionPaymentRepository = createSessionPaymentRepository();
   const appointmentService = new AppointmentService({
-    repository: createAppointmentRepository(),
+    repository: appointmentRepository,
     authRepository: repository,
     childService,
     videoProviderService,
     notificationService,
+    sessionPaymentRepository,
+    paymentRepository,
     logger,
     specialistDocumentService,
     meetingRules: config.jitsi
@@ -117,7 +125,7 @@ async function start() {
   });
   const subscriptionService = new SubscriptionService({
     repository: createSubscriptionRepository(),
-    paymentRepository: createPaymentRepository(),
+    paymentRepository,
     authRepository: repository,
     notificationService,
     logger,
@@ -126,6 +134,18 @@ async function start() {
     })
   });
   await subscriptionService.receiptService.initialize();
+  const sessionPaymentService = new SessionPaymentService({
+    repository: sessionPaymentRepository,
+    paymentRepository,
+    authRepository: repository,
+    receiptService: new PaymentReceiptService({
+      storageDirectory: path.join(config.mediaStorageDir, 'session-payment-receipts')
+    }),
+    appointmentService,
+    notificationService,
+    logger
+  });
+  await sessionPaymentService.receiptService.initialize();
   const gameRepository = createGameRepository();
   const learningPathService = new LearningPathService({
     repository: createLearningPathRepository(),
@@ -164,7 +184,8 @@ async function start() {
     appointmentService: databaseConnected ? appointmentService : null,
     specialistDocumentService,
     platformSettingsService: databaseConnected ? platformSettingsService : null,
-    adminVideoTestService: databaseConnected ? adminVideoTestService : null
+    adminVideoTestService: databaseConnected ? adminVideoTestService : null,
+    sessionPaymentService: databaseConnected ? sessionPaymentService : null
   });
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port }, 'Harf API listening.');

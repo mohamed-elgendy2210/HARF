@@ -18,6 +18,7 @@ import { createSpecialistRouter } from './routes/specialist.js';
 import { createNotificationsRouter } from './routes/notifications.js';
 import { createPlatformRouter } from './routes/platform.js';
 import { createTestimonialsRouter } from './routes/testimonials.js';
+import { createSessionPaymentsRouter } from './routes/sessionPayments.js';
 
 const API_PREFIX = '/api/v1';
 
@@ -48,7 +49,8 @@ export function createApp({
   reportService,
   platformSettingsService,
   testimonialService,
-  adminVideoTestService
+  adminVideoTestService,
+  sessionPaymentService
 }) {
   const app = express();
 
@@ -162,7 +164,8 @@ export function createApp({
       platformSettingsService,
       testimonialService,
       appointmentService,
-      adminVideoTestService
+      adminVideoTestService,
+      sessionPaymentService
     }));
     app.use(`${API_PREFIX}/directory`, databaseMiddleware);
     app.use(`${API_PREFIX}/directory`, createDirectoryRouter({ repository, appointmentService }));
@@ -176,6 +179,12 @@ export function createApp({
       app.use(`${API_PREFIX}/appointments`, createAppointmentsRouter({
         authenticationMiddleware,
         appointmentService
+      }));
+    }
+    if (sessionPaymentService) {
+      app.use(`${API_PREFIX}/appointments`, requireDatabase(getDatabaseState), createSessionPaymentsRouter({
+        authenticationMiddleware,
+        sessionPaymentService
       }));
     }
     if (childService) {
