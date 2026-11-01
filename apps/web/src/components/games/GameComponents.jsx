@@ -42,12 +42,19 @@ const stateLabels = {
 };
 
 export function GameImage({ src, alt, className }) {
-  const [failed, setFailed] = useState(!src);
-  useEffect(() => setFailed(!src), [src]);
-  if (failed) {
+  const [failedSource, setFailedSource] = useState('');
+  if (!src || failedSource === src) {
     return <span className={`${className} game-image-placeholder`} role="img" aria-label="الصورة غير متوفرة">▧</span>;
   }
-  return <img className={className} src={getApiUrl(src)} alt={alt ?? ''} onError={() => setFailed(true)} />;
+  return (
+    <img
+      key={src}
+      className={className}
+      src={getApiUrl(src)}
+      alt={alt ?? ''}
+      onError={() => setFailedSource(src)}
+    />
+  );
 }
 
 export function HarfMascot({ expression = 'talking', className = '' }) {
