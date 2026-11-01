@@ -147,8 +147,24 @@ export default function AdminLearningPaths({ logoUrl }) {
     setError('');
     setNotice('');
     const payload = {
-      ...editingPath,
-      activities: editingPath.activities.map(({ available: _available, ...activity }) => activity)
+      key: editingPath.key,
+      title: editingPath.title,
+      description: editingPath.description,
+      status: editingPath.status,
+      ageBands: editingPath.ageBands,
+      skillIds: editingPath.skillIds,
+      objectives: editingPath.objectives,
+      matchingRules: editingPath.matchingRules,
+      activities: editingPath.activities.map((activity) => ({
+        gameId: activity.gameId,
+        title: activity.title,
+        learningArea: activity.learningArea,
+        description: activity.description,
+        required: activity.required,
+        repeatable: activity.repeatable,
+        skillIds: activity.skillIds
+      })),
+      rules: editingPath.rules
     };
     try {
       const isExisting = paths.some(({ key }) => key === editingPath.key);
