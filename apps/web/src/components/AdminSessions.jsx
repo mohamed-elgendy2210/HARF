@@ -81,10 +81,17 @@ function useQueryState(initial) {
   const [reload, setReload] = useState(0);
   useEffect(() => {
     let active = true;
+    if (filters.from && filters.to && filters.from > filters.to) {
+      setLoading(false);
+      setError('تاريخ البداية يجب أن يكون قبل تاريخ النهاية أو مساويًا له.');
+      return () => { active = false; };
+    }
     const timer = window.setTimeout(() => {
       const query = new URLSearchParams({ page: String(page), limit: '20' });
       for (const [key, value] of Object.entries(filters)) {
-        if (value) query.set(key, value);
+        if (value) {
+          query.set(key, key === 'from' || key === 'to' ? dateQuery(value, key === 'to') : value);
+        }
       }
       setLoading(true);
       setError('');
@@ -146,9 +153,9 @@ function AppointmentMonitor() {
         <label><span>بحث بالاسم</span><input type="search" value={state.filters.search}
           onChange={(event) => state.update('search', event.target.value)} placeholder="ولي الأمر أو الأخصائي" /></label>
         <label><span>من تاريخ</span><input type="date" value={state.filters.from}
-          onChange={(event) => state.update('from', dateQuery(event.target.value))} /></label>
-        <label><span>إلى تاريخ</span><input type="date" value={state.filters.to ? state.filters.to.slice(0, 10) : ''}
-          onChange={(event) => state.update('to', dateQuery(event.target.value, true))} /></label>
+          onChange={(event) => state.update('from', event.target.value)} /></label>
+        <label><span>إلى تاريخ</span><input type="date" value={state.filters.to}
+          onChange={(event) => state.update('to', event.target.value)} /></label>
         <label><span>حالة الحجز</span><select value={state.filters.bookingStatus}
           onChange={(event) => state.update('bookingStatus', event.target.value)}>
           <option value="accepted">المؤكدة</option><option value="all">الكل</option>
@@ -359,6 +366,10 @@ function VideoTestPanel() {
 
   useEffect(() => {
     let active = true;
+    if (historyFilters.from && historyFilters.to && historyFilters.from > historyFilters.to) {
+      setError('تاريخ البداية يجب أن يكون قبل تاريخ النهاية أو مساويًا له.');
+      return () => { active = false; };
+    }
     Promise.all([
       apiRequest('/api/v1/admin/administrators'),
       apiRequest(`/api/v1/admin/video-tests?page=${historyPage}&limit=10${historyFilters.from ? `&from=${encodeURIComponent(dateQuery(historyFilters.from))}` : ''}${historyFilters.to ? `&to=${encodeURIComponent(dateQuery(historyFilters.to, true))}` : ''}${historyFilters.administratorId ? `&administratorId=${historyFilters.administratorId}` : ''}${historyFilters.status !== 'all' ? `&status=${historyFilters.status}` : ''}`)
