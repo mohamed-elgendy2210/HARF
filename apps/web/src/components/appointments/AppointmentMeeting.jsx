@@ -62,7 +62,7 @@ export function AppointmentJoinButton({ appointment, viewerRole, onJoin }) {
   const closesAt = new Date(appointment.meetingJoinClosesAt).getTime();
   const configured = appointment.meetingAvailable;
   const ended = ['ended', 'cancelled', 'failed'].includes(appointment.meetingStatus)
-    || appointment.sessionStatus === 'completed';
+    || ['completed', 'no_show', 'specialist_no_show'].includes(appointment.sessionStatus);
   const inWindow = now >= opensAt && now <= closesAt;
   const canJoin = configured && !ended && inWindow;
   if (!configured) {

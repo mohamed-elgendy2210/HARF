@@ -498,7 +498,7 @@ function createMemoryRepository() {
           && item.slotReserved
           && (
             ['pending', 'awaiting_payment', 'payment_under_review'].includes(item.status)
-            || (item.status === 'accepted' && item.sessionStatus !== 'completed')
+            || (item.status === 'accepted' && !['completed', 'no_show', 'specialist_no_show'].includes(item.sessionStatus))
             || ['awaiting_payment', 'pending_verification'].includes(item.payment?.status)
           )
         )) ?? null;
@@ -621,6 +621,34 @@ function createMemoryRepository() {
           privateSpecialistNotes: privateNotes,
           ...(hasMeeting ? { meeting: { ...appointment.meeting, status: 'ended', endedAt: now } } : {}),
           parentProgressReport: { ...structuredClone(parentReport), createdAt: now }
+        });
+        return structuredClone(appointment);
+      },
+      async markSessionNoShow(appointmentId, specialistUserId, now, hasMeeting) {
+        const appointment = appointments.get(String(appointmentId));
+        if (!appointment || String(appointment.specialistUserId) !== String(specialistUserId)
+          || appointment.status !== 'accepted'
+          || !['not_started', undefined].includes(appointment.sessionStatus)
+          || appointment.endsAt > now) return null;
+        Object.assign(appointment, {
+          sessionStatus: 'no_show',
+          sessionNoShowAt: now,
+          slotReserved: false,
+          ...(hasMeeting ? { meeting: { ...appointment.meeting, status: 'cancelled' } } : {})
+        });
+        return structuredClone(appointment);
+      },
+      async markSpecialistNoShow(appointmentId, parentUserId, now, hasMeeting) {
+        const appointment = appointments.get(String(appointmentId));
+        if (!appointment || String(appointment.parentUserId) !== String(parentUserId)
+          || appointment.status !== 'accepted'
+          || !['not_started', undefined].includes(appointment.sessionStatus)
+          || appointment.endsAt > now) return null;
+        Object.assign(appointment, {
+          sessionStatus: 'specialist_no_show',
+          sessionSpecialistNoShowAt: now,
+          slotReserved: false,
+          ...(hasMeeting ? { meeting: { ...appointment.meeting, status: 'cancelled' } } : {})
         });
         return structuredClone(appointment);
       }
@@ -1524,6 +1552,8 @@ test('Mongoose models declare unique email accounts and explicit TTL indexes', (
     && options.partialFilterExpression?.slotReserved === true));
   assert.equal(Appointment.schema.path('privateSpecialistNotes').options.maxlength, 4000);
   assert.equal(Appointment.schema.path('sessionStatus').enumValues.includes('completed'), true);
+  assert.equal(Appointment.schema.path('sessionStatus').enumValues.includes('no_show'), true);
+  assert.equal(Appointment.schema.path('sessionStatus').enumValues.includes('specialist_no_show'), true);
   assert.ok(Appointment.schema.indexes().some(([fields, options]) => fields['meeting.roomName'] === 1 && options.unique));
   assert.ok(AdminVideoTest.schema.indexes().some(([fields]) => fields.administratorId === 1 && fields.createdAt === -1));
   assert.ok(AdminVideoTest.schema.indexes().some(([fields]) => fields.status === 1 && fields.createdAt === -1));
@@ -2036,6 +2066,57 @@ test('specialist schedules reserve overlapping slots atomically and requests exp
   assert.equal((await expiredRead.json()).appointment.status, 'expired');
   const availableAgain = await request(`/directory/specialists/${specialist.user._id}/availability?from=${encodeURIComponent(expiryStart.toISOString())}&days=1`);
   assert.ok((await availableAgain.json()).availability.slots.some((slot) => slot.startsAt === expiryStart.toISOString()));
+
+  appointmentNow = sessionStart;
+  const noShowStart = localDateTimeToUtc(addLocalDays(localDate, 7), '10:00', 'Africa/Cairo');
+  const noShowBookingResponse = await request('/appointments', {
+    method: 'POST',
+    cookie: appointmentOwner.cookie,
+    csrfToken: appointmentOwner.csrfToken,
+    body: { childId: appointmentChildId, specialistId: specialist.user._id, startsAt: noShowStart.toISOString() }
+  });
+  const noShowBooking = (await noShowBookingResponse.json()).appointment;
+  const confirmedNoShowBooking = await request(`/appointments/${noShowBooking.id}/decision`, {
+    method: 'POST',
+    cookie: specialist.cookie,
+    csrfToken: specialist.csrfToken,
+    body: { decision: 'accepted' }
+  });
+  assert.equal(confirmedNoShowBooking.status, 200);
+  const parentCannotReportForAnotherParent = await request(
+    `/appointments/${noShowBooking.id}/session/specialist-no-show`,
+    { method: 'POST', cookie: unrelatedParent.cookie, csrfToken: unrelatedParent.csrfToken }
+  );
+  assert.equal(parentCannotReportForAnotherParent.status, 404);
+  const earlySpecialistNoShow = await request(
+    `/appointments/${noShowBooking.id}/session/specialist-no-show`,
+    { method: 'POST', cookie: appointmentOwner.cookie, csrfToken: appointmentOwner.csrfToken }
+  );
+  assert.equal(earlySpecialistNoShow.status, 409);
+  assert.equal((await earlySpecialistNoShow.json()).error.code, 'APPOINTMENT_SESSION_NOT_ENDED');
+  appointmentNow = new Date(noShowBooking.endsAt);
+  const reportedSpecialistNoShow = await request(
+    `/appointments/${noShowBooking.id}/session/specialist-no-show`,
+    { method: 'POST', cookie: appointmentOwner.cookie, csrfToken: appointmentOwner.csrfToken }
+  );
+  const reportedSpecialistNoShowPayload = await reportedSpecialistNoShow.json();
+  assert.equal(reportedSpecialistNoShow.status, 200, JSON.stringify(reportedSpecialistNoShowPayload));
+  assert.equal(reportedSpecialistNoShowPayload.appointment.sessionStatus, 'specialist_no_show');
+  assert.equal(new Date(reportedSpecialistNoShowPayload.appointment.sessionSpecialistNoShowAt).getTime(), appointmentNow.getTime());
+  const specialistNoShowRead = (await (await request(`/appointments/${noShowBooking.id}`, {
+    cookie: specialist.cookie
+  })).json()).appointment;
+  assert.equal(specialistNoShowRead.sessionStatus, 'specialist_no_show');
+  assert.ok(storedNotifications.some((item) => item.recipientUserId === String(specialist.user._id)
+    && item.resourceId === noShowBooking.id
+    && item.title === 'أبلغ ولي الأمر عن عدم حضور الأخصائي'));
+  const specialistNoShowMeeting = await request(`/appointments/${noShowBooking.id}/video-access`, {
+    method: 'POST',
+    cookie: appointmentOwner.cookie,
+    csrfToken: appointmentOwner.csrfToken
+  });
+  assert.equal(specialistNoShowMeeting.status, 409);
+
   appointmentService.videoProviderService = unconfiguredProvider;
   const gameAfterBooking = await request('/games/word-sounds', { cookie: parent.cookie });
   assert.equal(gameAfterBooking.status, 403);

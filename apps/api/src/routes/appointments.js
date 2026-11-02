@@ -90,6 +90,22 @@ export function createAppointmentsRouter({ authenticationMiddleware, appointment
     response.json({ appointment });
   });
 
+  router.post('/:appointmentId/session/no-show', requireRole('specialist'), requireCsrf, validate(appointmentParamsSchema, 'params'), async (request, response) => {
+    const appointment = await appointmentService.markSessionNoShow(
+      request.authenticated.user,
+      request.params.appointmentId
+    );
+    response.json({ appointment });
+  });
+
+  router.post('/:appointmentId/session/specialist-no-show', requireRole('parent'), requireCsrf, validate(appointmentParamsSchema, 'params'), async (request, response) => {
+    const appointment = await appointmentService.markSpecialistNoShow(
+      request.authenticated.user,
+      request.params.appointmentId
+    );
+    response.json({ appointment });
+  });
+
   router.post('/:appointmentId/video-access', requireCsrf, videoAccessLimiter, validate(appointmentParamsSchema, 'params'), async (request, response) => {
     response.set('Cache-Control', 'private, no-store');
     const access = await appointmentService.createVideoRoomAccess(

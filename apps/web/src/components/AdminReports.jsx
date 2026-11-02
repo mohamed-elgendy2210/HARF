@@ -13,7 +13,13 @@ const appointmentLabels = {
   rejected: 'مرفوض',
   expired: 'منتهي'
 };
-const sessionLabels = { not_started: 'لم تبدأ', in_progress: 'جارية', completed: 'مكتملة' };
+const sessionLabels = {
+  not_started: 'لم تبدأ',
+  in_progress: 'جارية',
+  completed: 'مكتملة',
+  no_show: 'لم يحضر الطفل',
+  specialist_no_show: 'أبلغ ولي الأمر عن عدم حضور الأخصائي'
+};
 
 function registrationLabel(key) {
   const [role, approval] = key.split(':');

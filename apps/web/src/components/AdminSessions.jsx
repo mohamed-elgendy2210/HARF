@@ -211,11 +211,13 @@ function AppointmentMonitor() {
             <dt>ولي الأمر / الطفل</dt><dd>{selected.parentName || 'غير متاح'} · {selected.childName || 'غير متاح'}</dd>
             <dt>الأخصائي</dt><dd>{selected.specialistName || 'غير متاح'}</dd>
             <dt>التاريخ والوقت</dt><dd>{localDateTime(selected.startsAt, selected.timeZone)} · {selected.durationMinutes} دقيقة ({selected.timeZone})</dd>
-            <dt>الحجز / الجلسة</dt><dd>{bookingLabels[selected.status]} · {selected.sessionStatus === 'completed' ? 'مكتملة' : selected.sessionStatus === 'in_progress' ? 'بدأت حسب تسجيل الأخصائي' : 'لم تبدأ'}</dd>
+            <dt>الحجز / الجلسة</dt><dd>{bookingLabels[selected.status]} · {selected.sessionStatus === 'completed' ? 'مكتملة' : selected.sessionStatus === 'no_show' ? 'لم يحضر الطفل' : selected.sessionStatus === 'specialist_no_show' ? 'أبلغ ولي الأمر عن عدم حضور الأخصائي' : selected.sessionStatus === 'in_progress' ? 'بدأت حسب تسجيل الأخصائي' : 'لم تبدأ'}</dd>
             <dt>الاجتماع</dt><dd>{meetingLabels[selected.meetingStatus ?? 'missing']}</dd>
             <dt>إنشاء الاجتماع</dt><dd>{localDateTime(selected.meetingCreatedAt)}</dd>
             <dt>رمز خطأ الإعداد</dt><dd>{selected.meetingProvisioningErrorCode || 'لا يوجد'}</dd>
             <dt>بدء / انتهاء الجلسة</dt><dd>{localDateTime(selected.sessionStartedAt)} / {localDateTime(selected.sessionEndedAt)}</dd>
+            {selected.sessionNoShowAt && <><dt>تسجيل عدم الحضور</dt><dd>{localDateTime(selected.sessionNoShowAt)}</dd></>}
+            {selected.sessionSpecialistNoShowAt && <><dt>بلاغ عدم حضور الأخصائي</dt><dd>{localDateTime(selected.sessionSpecialistNoShowAt)}</dd></>}
           </dl>
           <p className="dashboard-privacy-note">لا تُعرض بيانات الوصول للغرفة للإدارة، ولا يعني وجود غرفة أن الاجتماع نشط الآن.</p>
         </section>

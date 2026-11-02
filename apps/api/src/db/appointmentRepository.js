@@ -92,7 +92,7 @@ export function createAppointmentRepository() {
           { status: { $in: ['pending', 'awaiting_payment', 'payment_under_review'] } },
           {
             status: 'accepted',
-            sessionStatus: { $ne: 'completed' }
+            sessionStatus: { $nin: ['completed', 'no_show', 'specialist_no_show'] }
           },
           {
             'payment.status': { $in: ['awaiting_payment', 'pending_verification'] }
@@ -150,7 +150,8 @@ export function createAppointmentRepository() {
               { $limit: limit },
               { $project: {
                 _id: 1, startsAt: 1, endsAt: 1, timeZone: 1, durationMinutes: 1, status: 1,
-                sessionStatus: 1, sessionStartedAt: 1, sessionEndedAt: 1, meeting: 1, createdAt: 1,
+                sessionStatus: 1, sessionStartedAt: 1, sessionEndedAt: 1,
+                sessionNoShowAt: 1, sessionSpecialistNoShowAt: 1, meeting: 1, createdAt: 1,
                 meetingProvisioningFailedAt: 1, meetingProvisioningErrorCode: 1,
                 parentId: '$parent._id', parentName: '$parent.parentProfile.displayName',
                 childId: '$child._id', childName: '$child.displayName',
@@ -280,6 +281,44 @@ export function createAppointmentRepository() {
                 createdAt: now
               }
             : null
+        }
+      }, { new: true, runValidators: true }).lean();
+    },
+    markSessionNoShow(appointmentId, specialistUserId, now, hasMeeting) {
+      return Appointment.findOneAndUpdate({
+        _id: appointmentId,
+        specialistUserId,
+        status: 'accepted',
+        $or: [
+          { sessionStatus: 'not_started' },
+          { sessionStatus: { $exists: false } }
+        ],
+        endsAt: { $lte: now }
+      }, {
+        $set: {
+          sessionStatus: 'no_show',
+          sessionNoShowAt: now,
+          slotReserved: false,
+          ...(hasMeeting ? { 'meeting.status': 'cancelled' } : {})
+        }
+      }, { new: true, runValidators: true }).lean();
+    },
+    markSpecialistNoShow(appointmentId, parentUserId, now, hasMeeting) {
+      return Appointment.findOneAndUpdate({
+        _id: appointmentId,
+        parentUserId,
+        status: 'accepted',
+        $or: [
+          { sessionStatus: 'not_started' },
+          { sessionStatus: { $exists: false } }
+        ],
+        endsAt: { $lte: now }
+      }, {
+        $set: {
+          sessionStatus: 'specialist_no_show',
+          sessionSpecialistNoShowAt: now,
+          slotReserved: false,
+          ...(hasMeeting ? { 'meeting.status': 'cancelled' } : {})
         }
       }, { new: true, runValidators: true }).lean();
     }

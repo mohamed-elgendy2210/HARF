@@ -25,7 +25,9 @@ const statuses = {
 const sessionStatuses = {
   not_started: 'لم تبدأ',
   in_progress: 'جارية',
-  completed: 'مكتملة'
+  completed: 'مكتملة',
+  no_show: 'لم يحضر الطفل',
+  specialist_no_show: 'أبلغ ولي الأمر عن عدم حضور الأخصائي'
 };
 const APPOINTMENTS_PER_PAGE = 6;
 
@@ -67,6 +69,7 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   ));
   const [form, setForm] = useState(blankSchedule);
   const [appointments, setAppointments] = useState([]);
+  const [appointmentClock, setAppointmentClock] = useState(Date.now());
   const [visibleAppointmentCount, setVisibleAppointmentCount] = useState(APPOINTMENTS_PER_PAGE);
   const [meetingAppointment, setMeetingAppointment] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -81,6 +84,12 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   const [exceptionEnd, setExceptionEnd] = useState('11:00');
   const [exceptionUnavailable, setExceptionUnavailable] = useState(false);
   const [profile, setProfile] = useState(user.professionalProfile ?? {});
+
+  useEffect(() => {
+    if (section !== 'appointments') return undefined;
+    const timer = window.setInterval(() => setAppointmentClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [section]);
 
   const loadData = async () => {
     setLoading(true);
@@ -242,7 +251,11 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
         headers: { 'Content-Type': 'application/json' },
         ...(body ? { body: JSON.stringify(body) } : {})
       });
-      setNotice(action === 'start' ? 'بدأت الجلسة وتم تسجيل وقت البدء.' : 'انتهت الجلسة وحُفظ الملخص التعليمي لولي الأمر.');
+      setNotice(action === 'start'
+        ? 'بدأت الجلسة وتم تسجيل وقت البدء.'
+        : action === 'complete'
+          ? 'انتهت الجلسة وحُفظ الملخص التعليمي لولي الأمر.'
+          : 'تم تسجيل عدم حضور الطفل للموعد.');
       await loadData();
       return true;
     } catch (requestError) {
@@ -577,7 +590,8 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
                         {busyAppointmentId === appointment.id && <span role="status">جارٍ الحفظ…</span>}
                       </div>
                     )}
-                    {appointment.status === 'accepted' && appointment.sessionStatus !== 'completed' && (
+                    {appointment.status === 'accepted'
+                      && !['completed', 'no_show', 'specialist_no_show'].includes(appointment.sessionStatus) && (
                       <div className="specialist-appointment-card__actions">
                         {appointment.meetingAvailable && (
                           <AppointmentJoinButton
@@ -600,6 +614,18 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
                             {busySessionId === appointment.id ? 'جارٍ الحفظ…' : 'بدء تسجيل الجلسة'}
                           </button>
                         )}
+                        {appointment.sessionStatus === 'not_started'
+                          && new Date(appointment.endsAt).getTime() <= appointmentClock && (
+                            <button type="button" className="button button--small button--outline"
+                              disabled={Boolean(busySessionId)}
+                              onClick={() => {
+                                if (window.confirm('هل تريد تسجيل عدم حضور الطفل لهذا الموعد؟ لا يمكن التراجع عن هذا الإجراء.')) {
+                                  void updateSession(appointment, 'no-show');
+                                }
+                              }}>
+                              {busySessionId === appointment.id ? 'جارٍ الحفظ…' : 'تسجيل عدم حضور الطفل'}
+                            </button>
+                          )}
                       </div>
                     )}
                     {appointment.status === 'accepted' && (

@@ -85,6 +85,8 @@ function serializeAppointment(record, viewerRole) {
     sessionStatus: record.sessionStatus ?? 'not_started',
     sessionStartedAt: record.sessionStartedAt ?? null,
     sessionEndedAt: record.sessionEndedAt ?? null,
+    sessionNoShowAt: record.sessionNoShowAt ?? null,
+    sessionSpecialistNoShowAt: record.sessionSpecialistNoShowAt ?? null,
     meetingStatus: record.meeting?.status ?? (record.meetingProvisioningFailedAt ? 'failed' : null),
     meetingAvailable: Boolean(record.meeting?.roomName),
     ...(record.payment ? { payment: viewerRole === 'specialist'
@@ -405,6 +407,8 @@ export class AppointmentService {
         sessionStatus: record.sessionStatus ?? 'not_started',
         sessionStartedAt: record.sessionStartedAt ?? null,
         sessionEndedAt: record.sessionEndedAt ?? null,
+        sessionNoShowAt: record.sessionNoShowAt ?? null,
+        sessionSpecialistNoShowAt: record.sessionSpecialistNoShowAt ?? null,
         meetingStatus: record.meeting?.status ?? (record.meetingProvisioningFailedAt ? 'failed' : null),
         meetingCreatedAt: record.meeting?.createdAt ?? null,
         meetingProvisioningErrorCode: record.meetingProvisioningErrorCode ?? '',
@@ -487,7 +491,7 @@ export class AppointmentService {
     ).toISOString();
     appointment.meetingAvailable = Boolean(this.videoProviderService?.isConfigured()
       && record.status === 'accepted'
-      && record.sessionStatus !== 'completed'
+      && !['completed', 'no_show', 'specialist_no_show'].includes(record.sessionStatus)
       && !['ended', 'cancelled', 'failed'].includes(record.meeting?.status));
     appointment.meetingJoinAvailable = this.canJoinMeeting(record, viewerRole, this.now());
     if (viewerRole === 'parent' && appointment.parentProgressReport
@@ -646,6 +650,40 @@ export class AppointmentService {
     return serializeAppointment(updated, 'specialist');
   }
 
+  async markSpecialistNoShow(parent, appointmentId) {
+    const now = this.now();
+    const owned = await this.repository.findOwnedAppointment(
+      appointmentId,
+      'parentUserId',
+      idOf(parent)
+    );
+    if (!owned) throw new AppError(404, 'APPOINTMENT_NOT_FOUND', 'The appointment was not found.');
+    if (new Date(owned.endsAt).getTime() > now.getTime()) {
+      throw new AppError(409, 'APPOINTMENT_SESSION_NOT_ENDED', 'An appointment can be reported as a specialist no-show only after it ends.');
+    }
+    const updated = await this.repository.markSpecialistNoShow(
+      appointmentId,
+      idOf(parent),
+      now,
+      Boolean(owned.meeting?.roomName)
+    );
+    if (!updated) {
+      throw new AppError(409, 'APPOINTMENT_SESSION_NOT_MARKABLE_SPECIALIST_NO_SHOW', 'Only a confirmed appointment that has not started can be reported as a specialist no-show.');
+    }
+    await this.audit('appointment.specialist_no_show_reported', parent, updated.specialistUserId, {
+      appointmentId,
+      sessionSpecialistNoShowAt: now
+    });
+    await this.notify(updated.specialistUserId, {
+      type: 'session_report',
+      title: 'أبلغ ولي الأمر عن عدم حضور الأخصائي',
+      message: 'أبلغ ولي الأمر عن عدم حضور الأخصائي للموعد. راجع سجل المواعيد للتفاصيل.',
+      resourceType: 'appointment',
+      resourceId: appointmentId
+    });
+    return serializeAppointment(updated, 'parent');
+  }
+
   async completeSession(specialist, appointmentId, { privateNotes, parentReport }) {
     const now = this.now();
     const owned = await this.repository.findOwnedAppointment(
@@ -680,6 +718,40 @@ export class AppointmentService {
       message: parentReport
         ? 'أنهى الأخصائي الجلسة وأعدّ ملخصًا تعليميًا متاحًا في لوحة الأسرة.'
         : 'أنهى الأخصائي الجلسة.',
+      resourceType: 'appointment',
+      resourceId: appointmentId
+    });
+    return serializeAppointment(updated, 'specialist');
+  }
+
+  async markSessionNoShow(specialist, appointmentId) {
+    const now = this.now();
+    const owned = await this.repository.findOwnedAppointment(
+      appointmentId,
+      'specialistUserId',
+      idOf(specialist)
+    );
+    if (!owned) throw new AppError(404, 'APPOINTMENT_NOT_FOUND', 'The appointment was not found.');
+    if (new Date(owned.endsAt).getTime() > now.getTime()) {
+      throw new AppError(409, 'APPOINTMENT_SESSION_NOT_ENDED', 'An appointment can be marked as a no-show only after it ends.');
+    }
+    const updated = await this.repository.markSessionNoShow(
+      appointmentId,
+      idOf(specialist),
+      now,
+      Boolean(owned.meeting?.roomName)
+    );
+    if (!updated) {
+      throw new AppError(409, 'APPOINTMENT_SESSION_NOT_MARKABLE_NO_SHOW', 'Only a confirmed appointment that has not started can be marked as a no-show.');
+    }
+    await this.audit('appointment.session_no_show', specialist, updated.parentUserId, {
+      appointmentId,
+      sessionNoShowAt: now
+    });
+    await this.notify(updated.parentUserId, {
+      type: 'session_report',
+      title: 'لم يحضر الطفل الجلسة',
+      message: 'سجّل الأخصائي عدم حضور الطفل للموعد. يمكنك مراجعة سجل المواعيد لمزيد من التفاصيل.',
       resourceType: 'appointment',
       resourceId: appointmentId
     });
@@ -724,7 +796,7 @@ export class AppointmentService {
   canJoinMeeting(appointment, role, now) {
     if (!this.videoProviderService?.isConfigured()
       || appointment.status !== 'accepted'
-      || appointment.sessionStatus === 'completed'
+      || ['completed', 'no_show', 'specialist_no_show'].includes(appointment.sessionStatus)
       || ['ended', 'cancelled', 'failed'].includes(appointment.meeting?.status)) return false;
     const earlyMinutes = role === 'specialist'
       ? this.meetingRules.specialistEarlyJoinMinutes
@@ -739,7 +811,7 @@ export class AppointmentService {
     if (appointment.status !== 'accepted') {
       throw new AppError(409, 'APPOINTMENT_NOT_CONFIRMED', 'Video access is available only for a confirmed appointment.');
     }
-    if (appointment.sessionStatus === 'completed'
+    if (['completed', 'no_show', 'specialist_no_show'].includes(appointment.sessionStatus)
       || ['ended', 'cancelled', 'failed'].includes(appointment.meeting?.status)) {
       throw new AppError(409, 'MEETING_NOT_AVAILABLE', 'This meeting is no longer available.');
     }

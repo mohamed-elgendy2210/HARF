@@ -170,6 +170,8 @@ export default function ParentDashboard({
   const [loadingAvailability, setLoadingAvailability] = useState(false);
   const [loadingAppointments, setLoadingAppointments] = useState(false);
   const [appointments, setAppointments] = useState([]);
+  const [appointmentClock, setAppointmentClock] = useState(Date.now());
+  const [busySpecialistNoShowId, setBusySpecialistNoShowId] = useState('');
   const [appointmentFilter, setAppointmentFilter] = useState('all');
   const [meetingAppointment, setMeetingAppointment] = useState(null);
   const [bookingSlotStartsAt, setBookingSlotStartsAt] = useState('');
@@ -188,6 +190,12 @@ export default function ParentDashboard({
   const [error, setError] = useState('');
   const [sessionExpired, setSessionExpired] = useState(false);
   const [profileName, setProfileName] = useState(user.parentProfile?.displayName ?? '');
+
+  useEffect(() => {
+    if (section !== 'appointments') return undefined;
+    const timer = window.setInterval(() => setAppointmentClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [section]);
 
   useEffect(() => {
     setProfileName(user.parentProfile?.displayName ?? '');
@@ -580,6 +588,27 @@ export default function ParentDashboard({
       reportError(requestError);
     } finally {
       setSubmittingSessionPayment(false);
+    }
+  };
+
+  const reportSpecialistNoShow = async (appointment) => {
+    if (!window.confirm('هل تريد إبلاغ الأخصائي بعدم حضوره للموعد؟ سيتم تسجيل البلاغ في سجل الموعد وإشعار الأخصائي.')) return;
+    setBusySpecialistNoShowId(appointment.id);
+    clearError();
+    setNotice('');
+    try {
+      const { appointment: updatedAppointment } = await apiRequest(
+        `/api/v1/appointments/${appointment.id}/session/specialist-no-show`,
+        { method: 'POST' }
+      );
+      setAppointments((current) => current.map((item) => item.id === appointment.id
+        ? updatedAppointment
+        : item));
+      setNotice('تم تسجيل بلاغ عدم حضور الأخصائي وإشعاره.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusySpecialistNoShowId('');
     }
   };
 
@@ -1638,7 +1667,9 @@ export default function ParentDashboard({
                         <p>حالة الجلسة: {{
                           not_started: 'لم تبدأ',
                           in_progress: 'جارية',
-                          completed: 'مكتملة'
+                          completed: 'مكتملة',
+                          no_show: 'لم يحضر الطفل',
+                          specialist_no_show: 'لم يحضر الأخصائي'
                         }[appointment.sessionStatus] || 'لم تبدأ'}</p>
                       )}
                       {appointment.parentProgressReport && (
@@ -1667,7 +1698,13 @@ export default function ParentDashboard({
                           {appointment.sessionEndedAt && (
                             <p className="dashboard-privacy-note">انتهت الجلسة: {formatDate(appointment.sessionEndedAt)}</p>
                           )}
-                          {appointment.sessionStatus !== 'completed' && (
+                          {appointment.sessionNoShowAt && (
+                            <p className="dashboard-privacy-note">سُجّل عدم الحضور: {formatDate(appointment.sessionNoShowAt)}</p>
+                          )}
+                          {appointment.sessionSpecialistNoShowAt && (
+                            <p className="dashboard-privacy-note">أُبلغ عن عدم حضور الأخصائي: {formatDate(appointment.sessionSpecialistNoShowAt)}</p>
+                          )}
+                          {!['completed', 'no_show', 'specialist_no_show'].includes(appointment.sessionStatus) && (
                             <>
                               <p className="dashboard-privacy-note">
                                 جهّزوا جهازًا متصلًا بالإنترنت، واسمحوا للمتصفح باستخدام الكاميرا والميكروفون عند تشغيلهما داخل الجلسة.
@@ -1679,6 +1716,16 @@ export default function ParentDashboard({
                               />
                             </>
                           )}
+                          {appointment.sessionStatus === 'not_started'
+                            && new Date(appointment.endsAt).getTime() <= appointmentClock && (
+                              <button type="button" className="button button--small button--outline"
+                                disabled={Boolean(busySpecialistNoShowId)}
+                                onClick={() => void reportSpecialistNoShow(appointment)}>
+                                {busySpecialistNoShowId === appointment.id
+                                  ? 'جارٍ تسجيل البلاغ…'
+                                  : 'الإبلاغ عن عدم حضور الأخصائي'}
+                              </button>
+                            )}
                         </>
                       )}
                     </div>
