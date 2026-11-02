@@ -340,7 +340,17 @@ export function GameFeedback({
   );
 }
 
-export function GameCompletion({ result, isTrial, saved, onReplay, onReturn, muted, nextActivity, childId }) {
+export function GameCompletion({
+  result,
+  isTrial,
+  saved,
+  onReplay,
+  onReturn,
+  muted,
+  nextActivity,
+  childId,
+  returnLabel = isTrial ? 'كل الألعاب' : 'لوحة الأسرة'
+}) {
   const successful = result.scorePercent >= 80;
   const videoRef = useRef(null);
   const [videoFailed, setVideoFailed] = useState(false);
@@ -506,7 +516,7 @@ export function GameCompletion({ result, isTrial, saved, onReplay, onReturn, mut
               النشاط التالي: {nextActivity.title}
             </a>
           )}
-          <a className="button button--outline" href={onReturn}>{isTrial ? 'كل الألعاب' : 'لوحة الأسرة'}</a>
+          <a className="button button--outline" href={onReturn}>{returnLabel}</a>
         </div>
       </div>
     </section>

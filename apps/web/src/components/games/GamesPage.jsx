@@ -193,6 +193,10 @@ function GamePlay({ gameId }) {
     () => new URLSearchParams(window.location.search).get('childId') ?? '',
     []
   );
+  const enteredFromHomepage = useMemo(
+    () => new URLSearchParams(window.location.search).get('source') === 'home',
+    []
+  );
 
   useEffect(() => {
     if (!completion) return undefined;
@@ -282,6 +286,15 @@ function GamePlay({ gameId }) {
   }, [game, gameId, selectedChildId]);
 
   const isTrial = game?.access === 'trial';
+  const childPathId = selectedChildId || requestedChildId;
+  const returnHref = isTrial
+    ? enteredFromHomepage ? '/#trial-games' : '/games'
+    : requestedChildId
+      ? `/games?childId=${encodeURIComponent(childPathId)}`
+      : '/dashboard';
+  const returnLabel = isTrial
+    ? enteredFromHomepage ? 'العودة للألعاب التجريبية' : 'كل الألعاب'
+    : requestedChildId ? 'العودة لمسار الطفل' : 'لوحة الأسرة';
   const currentQuestion = game?.questions[questionIndex];
   const companionState = feedback
     ? feedback.correct ? 'correct' : 'encouragement'
@@ -478,7 +491,7 @@ function GamePlay({ gameId }) {
   return (
     <div className="game-page game-page--play">
       <GameHeader
-        backHref={isTrial ? '/games' : '/dashboard'}
+        backHref={returnHref}
         showAuth={false}
         immersive
         onBack={(event) => {
@@ -564,8 +577,9 @@ function GamePlay({ gameId }) {
                 muted={muted}
                 nextActivity={nextActivity}
                 childId={selectedChildId}
+                returnLabel={returnLabel}
                 onReplay={startGame}
-                onReturn={isTrial ? '/games' : `/dashboard?childId=${encodeURIComponent(selectedChildId)}`}
+                onReturn={returnHref}
               />
             ) : (
               <div className={`game-stage${started ? ' game-stage--active' : ' game-stage--welcome'}`}>

@@ -200,7 +200,7 @@ function TrialGames() {
               <h3>{game.title}</h3>
               <p>{game.description}</p>
               <span className="game-card__meta">{game.questionCount} أسئلة قصيرة · {game.companion}</span>
-              <a className="button button--primary" href={`/games/${encodeURIComponent(game.id)}`}>جرّب اللعبة</a>
+              <a className="button button--primary" href={`/games/${encodeURIComponent(game.id)}?source=home`}>جرّب اللعبة</a>
             </article>
           ))}
         </div>
@@ -396,7 +396,7 @@ function Hero({ settings }) {
         <h1>{homepage.title}</h1>
         <p>{homepage.description}</p>
         <div className="hero__actions">
-          <a className="button button--primary" href="/games/first-letter-trial">{homepage.primaryAction}</a>
+          <a className="button button--primary" href="/games/first-letter-trial?source=home">{homepage.primaryAction}</a>
           <a className="button button--outline" href="#journey">{homepage.secondaryAction}</a>
         </div>
       </div>
@@ -515,7 +515,7 @@ function Plans() {
           <h3>تجريبية</h3>
           <p className="plan-card__price">مجانية</p>
           <ul><li>لعبة تجريبية واحدة</li><li>بدون اشتراك</li><li>لا تحفظ بيانات شخصية</li></ul>
-          <a className="button button--small button--outline" href="/games/first-letter-trial">جرّب</a>
+          <a className="button button--small button--outline" href="/games/first-letter-trial?source=home">جرّب</a>
         </article>
         <article className="plan-card plan-card--featured">
           <h3>اشتراك شهري</h3>
