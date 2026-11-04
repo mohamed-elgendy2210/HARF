@@ -10,7 +10,8 @@ This schema is implemented with Mongoose models in `apps/api/src/models/`. Mongo
 |---|---|---|
 | `email` | normalized lowercase string, required, unique index | Login and notices |
 | `passwordHash` | scrypt encoded hash, `select: false` | Password verification; never returned by API |
-| `role` | enum `parent`, `specialist`, `admin` | Assigned at registration only for parent/specialist; admin only by CLI provisioning |
+| `role` | enum `parent`, `specialist`, `admin` | Parent/specialist roles are assigned at registration; administrator roles are provisioned by authorized administrators or the CLI |
+| `adminRoleId` | nullable reference to `roles` | Database-backed permission set for admin accounts; ignored for parent/specialist accounts |
 | `emailVerifiedAt` | nullable Date | Verification state |
 | `approvalStatus` | enum `pending`, `approved`, `rejected` | Administrator approval for parent/specialist accounts |
 | `accountStatus` | enum `active`, `suspended` | Suspension state; checked every authenticated request |
@@ -18,9 +19,15 @@ This schema is implemented with Mongoose models in `apps/api/src/models/`. Mongo
 | `professionalProfile` | strict nested schema | Specialist display name, specialty, credentials, bio, and explicit public-listing opt-in |
 | `timestamps` | Mongoose created/updated dates | Account history |
 
-Indexes: unique `{ email: 1 }`; a unique partial `{ role: 1 }` index permits only one `admin` during the current bootstrap-only policy; directory lookup `{ role: 1, approvalStatus: 1, accountStatus: 1, emailVerifiedAt: 1, 'professionalProfile.publicListing': 1 }`.
+Indexes: unique `{ email: 1 }`; directory lookup `{ role: 1, approvalStatus: 1, accountStatus: 1, emailVerifiedAt: 1, 'professionalProfile.publicListing': 1 }`. Startup removes the legacy `single_admin_bootstrap` index if present.
 
 The public directory query additionally requires every professional field and opt-in. Password, approval, role, account status, and verification state are not mass-assignable through profile or registration endpoints.
+
+### `roles`
+
+Stores system and custom administrator roles: `key`, `name`, `description`, `permissions`, `isSystemRole`, `isActive`, and timestamps. The system roles are Super Admin, Admin, Parent, and Therapist; parent/specialist account authorization continues to use the existing immutable `users.role` field. Startup creates missing system roles and assigns unassigned legacy administrators: the oldest becomes Super Admin and remaining accounts receive Admin. New administrators receive the Admin role when its grants are within their creator's grants; otherwise a restricted role is created.
+
+Indexes: unique `{ key: 1 }`; `{ isActive: 1, name: 1 }`. System roles cannot be deleted; Parent, Therapist, and Super Admin role definitions cannot be edited. A role assigned to an administrator cannot be deleted or deactivated. Permission changes and administrator role assignments are recorded in `auditEvents`.
 
 ### `children`
 
@@ -160,9 +167,9 @@ Stores action, nullable actor/user reference, nullable target/user reference, su
 
 ### `notifications`
 
-Each notification stores a recipient user reference, allow-listed event type, bounded title/message, resource kind/ID, nullable `readAt`, and creation timestamp. In-app messages are intentionally generic and must not contain child details, receipts, private specialist notes, or report content. Resource IDs are references for application use and are not exposed as navigation parameters by the dashboard.
+Each notification stores a recipient user reference, centralized event type, bounded title/message, resource kind/ID, optional same-origin relative `actionUrl`, optional idempotency key, nullable `readAt`, and creation timestamp. In-app messages are intentionally generic and must not contain child details, receipts, private specialist notes, or report content. Action URLs are navigation hints only; the destination API must still enforce ownership and authorization.
 
-Indexes: `{ recipientUserId: 1, createdAt: -1, _id: -1 }` and `{ recipientUserId: 1, readAt: 1, createdAt: -1 }`. Lists are capped at 50 newest records. Read and mark-all-read operations filter by both notification ID (where applicable) and the authenticated recipient ID. The API response omits `recipientUserId`.
+Indexes: `{ recipientUserId: 1, createdAt: -1, _id: -1 }`, `{ recipientUserId: 1, readAt: 1, createdAt: -1 }`, and a unique partial `{ recipientUserId: 1, dedupeKey: 1 }` index for idempotent event delivery. Lists return 20 newest records by default, allow at most 50 per request, and are offset-paginated with a bounded offset. An independent unread-count endpoint reports the complete unread count. Read and mark-all-read operations filter by the authenticated recipient ID. The API response omits `recipientUserId`.
 
 ## Consistency and authorization rules
 

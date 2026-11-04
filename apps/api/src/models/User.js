@@ -29,6 +29,7 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true, trim: true, maxlength: 254 },
   passwordHash: { type: String, required: true, select: false },
   role: { type: String, enum: ['parent', 'specialist', 'admin'], required: true, immutable: true },
+  adminRoleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Role', default: null },
   emailVerifiedAt: { type: Date, default: null },
   approvalStatus: { type: String, enum: ['pending', 'approved', 'rejected'], required: true },
   accountStatus: { type: String, enum: ['active', 'suspended'], default: 'active', required: true },

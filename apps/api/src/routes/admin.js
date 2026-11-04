@@ -4,7 +4,7 @@ import multer from 'multer';
 import { requireApprovedAccount, requireAuthentication, requireCsrf, requireRole } from '../middleware/auth.js';
 import { AppError } from '../middleware/errors.js';
 import { validate } from '../middleware/validate.js';
-import { accountIdSchema, accountStatusSchema, administratorCreateSchema, approvalSchema } from '../validation/auth.js';
+import { accountIdSchema, accountStatusSchema, administratorCreateSchema, approvalSchema, roleIdSchema } from '../validation/auth.js';
 import {
   assetIdSchema,
   createGameSchema,
@@ -46,6 +46,12 @@ import {
   adminVideoTestParamsSchema,
   adminVideoTestResultsSchema
 } from '../validation/adminVideo.js';
+import { requireAdminRequestPermission } from '../auth/permissions.js';
+import {
+  administratorRoleSchema,
+  createRoleSchema,
+  updateRoleSchema
+} from '../validation/roles.js';
 
 const mediaUpload = multer({
   storage: multer.memoryStorage(),
@@ -100,10 +106,37 @@ export function createAdminRouter({
   testimonialService,
   appointmentService,
   adminVideoTestService,
-  sessionPaymentService
+  sessionPaymentService,
+  roleService
 }) {
   const router = Router();
-  router.use(authenticationMiddleware, requireAuthentication, requireApprovedAccount, requireRole('admin'), requireCsrf);
+  router.use(
+    authenticationMiddleware,
+    requireAuthentication,
+    requireApprovedAccount,
+    requireRole('admin'),
+    requireCsrf,
+    requireAdminRequestPermission
+  );
+
+  router.get('/roles', async (_request, response) => {
+    response.json({
+      roles: await roleService.list(),
+      permissions: roleService.permissionCatalog()
+    });
+  });
+  router.post('/roles', validate(createRoleSchema), async (request, response) => {
+    response.status(201).json({ role: await roleService.create(request.authenticated.user, request.body) });
+  });
+  router.put('/roles/:roleId', validate(roleIdSchema, 'params'), validate(updateRoleSchema), async (request, response) => {
+    response.json({
+      role: await roleService.update(request.authenticated.user, request.params.roleId, request.body)
+    });
+  });
+  router.delete('/roles/:roleId', validate(roleIdSchema, 'params'), async (request, response) => {
+    await roleService.remove(request.authenticated.user, request.params.roleId);
+    response.status(204).end();
+  });
 
   if (appointmentService) {
     router.get('/appointments', validate(adminAppointmentQuerySchema, 'query'), async (request, response) => {
@@ -169,13 +202,27 @@ export function createAdminRouter({
   });
 
   router.post('/administrators', validate(administratorCreateSchema), async (request, response) => {
-    const administrator = await authService.createAdministrator(request.authenticated.user, request.body);
+    const adminRole = await roleService.roleForNewAdministrator(request.authenticated.user, request.body.email);
+    const administrator = await authService.createAdministrator(
+      request.authenticated.user,
+      request.body,
+      adminRole
+    );
     response.status(201).json({ administrator });
   });
 
   router.delete('/administrators/:accountId', validate(accountIdSchema, 'params'), async (request, response) => {
     await authService.deleteAdministrator(request.authenticated.user, request.params.accountId);
     response.status(204).end();
+  });
+
+  router.patch('/administrators/:accountId/role', validate(accountIdSchema, 'params'), validate(administratorRoleSchema), async (request, response) => {
+    const administrator = await roleService.assignAdministratorRole(
+      request.authenticated.user,
+      request.params.accountId,
+      request.body.roleId
+    );
+    response.json({ administrator });
   });
 
   if (platformSettingsService) {

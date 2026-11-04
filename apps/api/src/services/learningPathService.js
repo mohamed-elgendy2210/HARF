@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 
 function accuracyPercent(attempts) {
   const questionCount = attempts.reduce((total, attempt) => total + attempt.totalQuestions, 0);
@@ -49,12 +50,14 @@ function selectedTrialIds(setting) {
 }
 
 export class LearningPathService {
-  constructor({ repository, gameRepository, childService, subscriptionService, authService, now = () => new Date() }) {
+  constructor({ repository, gameRepository, childService, subscriptionService, authService, notificationService, logger, now = () => new Date() }) {
     this.repository = repository;
     this.gameRepository = gameRepository;
     this.childService = childService;
     this.subscriptionService = subscriptionService;
     this.authService = authService;
+    this.notificationService = notificationService;
+    this.logger = logger;
     this.now = now;
   }
 
@@ -457,6 +460,21 @@ export class LearningPathService {
       pathKeys: keys,
       questionnaireVersion: input.questionnaireVersion
     });
+    if (assigned.length) {
+      try {
+        await this.notificationService?.notify(parentUserId, {
+          type: NOTIFICATION_TYPES.LEARNING_PATH_ASSIGNED,
+          title: 'تم تحديث مسارات التعلّم',
+          message: `تم حفظ ${assigned.length} من مسارات التعلّم للطفل.`,
+          resourceType: 'child',
+          resourceId: childId,
+          dedupeKey: `learning-path-assignment:${childId}:${input.submissionId}`,
+          actionUrl: `/dashboard?section=progress&childId=${encodeURIComponent(childId)}`
+        });
+      } catch (error) {
+        this.logger?.error({ error, parentUserId, childId }, 'Learning path notification could not be saved.');
+      }
+    }
     return { assignments: assigned };
   }
 

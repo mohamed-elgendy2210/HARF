@@ -10,6 +10,7 @@ import { AuthService, hashOpaqueToken, isProfessionalProfileComplete } from '../
 import { hashPassword } from '../src/services/passwords.js';
 import { createLogger } from '../src/lib/logger.js';
 import { User } from '../src/models/User.js';
+import { Role } from '../src/models/Role.js';
 import { PUBLIC_SPECIALIST_PROJECTION } from '../src/db/authRepository.js';
 import { Session } from '../src/models/Session.js';
 import { AuthToken } from '../src/models/AuthToken.js';
@@ -45,6 +46,7 @@ import { getGame, scoreGame } from '../src/games/catalog.js';
 import { AppointmentService } from '../src/services/appointmentService.js';
 import { JitsiIframeAdapter, VideoProviderService } from '../src/services/videoProviderService.js';
 import { AdminVideoTestService } from '../src/services/adminVideoTestService.js';
+import { ALL_PERMISSIONS } from '../src/auth/permissions.js';
 import {
   addLocalDays,
   assertTimeZone,
@@ -1328,6 +1330,12 @@ before(async () => {
         .filter((item) => item.recipientUserId === String(recipientUserId))
         .map(({ recipientUserId: _recipientUserId, ...item }) => item);
     },
+    async unreadCount(recipientUserId) {
+      return storedNotifications.filter((item) => item.recipientUserId === String(recipientUserId) && !item.readAt).length;
+    },
+    async count(recipientUserId) {
+      return storedNotifications.filter((item) => item.recipientUserId === String(recipientUserId)).length;
+    },
     async markRead(recipientUserId, notificationId) {
       const notification = storedNotifications.find((item) => item.id === notificationId
         && item.recipientUserId === String(recipientUserId));
@@ -1500,6 +1508,13 @@ before(async () => {
     email: 'admin@harf.test',
     passwordHash: await hashPassword('administrator password safe'),
     role: 'admin',
+    adminRoleId: {
+      _id: '000000000000000000000001',
+      key: 'super-admin',
+      name: 'Super Admin',
+      permissions: ALL_PERMISSIONS,
+      isActive: true
+    },
     emailVerifiedAt: new Date(),
     approvalStatus: 'approved',
     accountStatus: 'active'
@@ -1521,7 +1536,27 @@ before(async () => {
     reportService,
     platformSettingsService,
     testimonialService,
-    adminVideoTestService
+    adminVideoTestService,
+    roleService: {
+      async findSystemRole() {
+        return {
+          _id: '000000000000000000000002',
+          key: 'admin',
+          name: 'Admin',
+          permissions: ALL_PERMISSIONS.filter((permission) => !['roles.manage', 'permissions.manage'].includes(permission)),
+          isActive: true
+        };
+      },
+      async roleForNewAdministrator() {
+        return {
+          _id: '000000000000000000000002',
+          key: 'admin',
+          name: 'Admin',
+          permissions: ALL_PERMISSIONS.filter((permission) => !['roles.manage', 'permissions.manage'].includes(permission)),
+          isActive: true
+        };
+      }
+    }
   }));
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
@@ -1535,6 +1570,8 @@ after(async () => {
 });
 
 test('Mongoose models declare unique email accounts and explicit TTL indexes', () => {
+  assert.equal(User.schema.path('adminRoleId').options.ref, 'Role');
+  assert.ok(Role.schema.indexes().some(([fields, options]) => fields.key === 1 && options.unique));
   assert.ok(User.schema.indexes().some(([fields, options]) => fields.email === 1 && options.unique));
   assert.equal(User.schema.indexes().some(([fields, options]) => fields.role === 1 && options.unique), false);
   assert.ok(Session.schema.indexes().some(([fields, options]) => fields.expiresAt === 1 && options.expireAfterSeconds === 0));
@@ -1772,6 +1809,9 @@ test('specialist schedules reserve overlapping slots atomically and requests exp
   assert.equal(booked.amountMinor, 30000);
   assert.equal(booked.durationMinutes, 30);
   assert.equal(booked.status, 'pending');
+  assert.ok(storedNotifications.some((item) => item.recipientUserId === String(admin._id)
+    && item.type === 'appointment_request'
+    && String(item.resourceId) === booked.id));
   assert.equal(new Date(booked.expiresAt).getTime(), new Date(booked.requestedAt).getTime() + 48 * 60 * 60 * 1000);
   assert.equal(new Date(booked.expiresAt).getTime() - new Date(booked.requestedAt).getTime(), 48 * 60 * 60 * 1000);
   const changedSchedule = await request('/specialist/availability', {
@@ -3270,7 +3310,10 @@ test('administrator reports and exports are role-restricted and notifications ar
   const ownPayload = await ownNotifications.json();
   assert.equal(ownPayload.notifications.length, 1);
   assert.equal(ownPayload.notifications[0].id, parentNotification.id);
+  assert.equal(ownPayload.unreadCount, 1);
   assert.equal('recipientUserId' in ownPayload.notifications[0], false);
+  assert.deepEqual(await (await request('/notifications/unread-count', { cookie: parent.cookie })).json(), { unreadCount: 1 });
+  assert.equal((await request('/notifications?limit=51', { cookie: parent.cookie })).status, 400);
   assert.equal((await request(`/notifications/${parentNotification.id}/read`, {
     method: 'POST',
     cookie: otherParent.cookie,
@@ -3281,6 +3324,7 @@ test('administrator reports and exports are role-restricted and notifications ar
     cookie: parent.cookie,
     csrfToken: parent.csrfToken
   })).status, 200);
+  assert.deepEqual(await (await request('/notifications/unread-count', { cookie: parent.cookie })).json(), { unreadCount: 0 });
 
   assert.equal((await request('/admin/reports', { cookie: parent.cookie })).status, 403);
   assert.equal((await request('/admin/reports/export.csv', { cookie: parent.cookie })).status, 403);
@@ -3303,7 +3347,7 @@ test('administrator reports and exports are role-restricted and notifications ar
     body: { approvalStatus: 'approved' }
   });
   assert.equal(approvalResponse.status, 200);
-  assert.equal((await notificationService.list(pendingAccount._id)).some(({ type }) => type === 'account_approval'), true);
+  assert.equal((await notificationService.list(pendingAccount._id)).some(({ type }) => type === 'account_approved'), true);
 
   const reportResponse = await request('/admin/reports?from=2026-01-01T00%3A00%3A00.000Z&to=2026-01-31T23%3A59%3A59.999Z', {
     cookie: adminCookie
@@ -3991,6 +4035,7 @@ test('admin-only approval rejects parent actors and does not accept role or perm
     csrfToken: parentCsrf,
     body: { approvalStatus: 'approved' }
   });
+
   assert.equal(forbidden.status, 403);
 
   const adminLogin = await request('/auth/login', {
@@ -4063,6 +4108,32 @@ test('admin-only approval rejects parent actors and does not accept role or perm
   });
   assert.equal(reactivated.status, 200);
   assert.equal((await request('/auth/me', { cookie: targetCookie })).status, 401);
+});
+
+test('admin APIs enforce the assigned role permissions server-side', async () => {
+  const limitedAdmin = await repository.createUser({
+    email: 'limited-admin@harf.test',
+    passwordHash: await hashPassword('limited admin password safe'),
+    role: 'admin',
+    adminRoleId: {
+      _id: '000000000000000000000099',
+      key: 'limited-admin',
+      name: 'Limited Admin',
+      permissions: ['users.view'],
+      isActive: true
+    },
+    emailVerifiedAt: new Date(),
+    approvalStatus: 'approved',
+    accountStatus: 'active'
+  });
+  const session = await authService.createSession(limitedAdmin);
+  const cookie = `harf.sid=${session.rawToken}`;
+
+  assert.equal((await request('/admin/accounts', { cookie })).status, 200);
+  assert.equal((await request('/admin/payments', { cookie })).status, 403);
+  assert.equal((await request('/admin/roles', { cookie })).status, 403);
+  await repository.deleteSessions(limitedAdmin._id);
+  await repository.deleteAdministrator(limitedAdmin._id);
 });
 
 test('admin can remove only pending registration requests and removal invalidates sessions', async () => {

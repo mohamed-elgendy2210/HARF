@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 
 function idOf(record) {
   return String(record?._id ?? record?.id ?? record);
@@ -115,20 +116,30 @@ export class SessionPaymentService {
       { appointmentId, method, amountMinor: appointment.payment.amountMinor }
     );
     await this.notify(idOf(parent), {
-      type: 'payment_review',
+      type: NOTIFICATION_TYPES.PAYMENT_REVIEW,
       title: 'تم إرسال إيصال الجلسة',
       message: 'تم استلام الإيصال، والدفع الآن قيد المراجعة الإدارية.',
       resourceType: 'appointment',
-      resourceId: appointmentId
+      resourceId: appointmentId,
+      actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
+    });
+    await this.notify(idOf(appointment.specialistUserId), {
+      type: NOTIFICATION_TYPES.PAYMENT_REVIEW,
+      title: 'إيصال دفع جلسة للمراجعة',
+      message: 'أرسل ولي الأمر إيصال دفع الجلسة، وهو بانتظار مراجعة الإدارة.',
+      resourceType: 'appointment',
+      resourceId: appointmentId,
+      actionUrl: `/specialist?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
     });
     try {
       for (const administrator of await this.authRepository.listActiveAdministrators()) {
         await this.notify(idOf(administrator), {
-          type: 'payment_review',
+          type: NOTIFICATION_TYPES.PAYMENT_REVIEW,
           title: 'إيصال جلسة جديد للمراجعة',
           message: 'يوجد إيصال دفع جلسة بانتظار المراجعة الإدارية.',
           resourceType: 'appointment',
-          resourceId: appointmentId
+          resourceId: appointmentId,
+          actionUrl: '/admin?view=sessionPayments'
         });
       }
     } catch (error) {
@@ -233,26 +244,29 @@ export class SessionPaymentService {
         this.logger?.error({ error, appointmentId }, 'Paid appointment meeting setup failed.');
       }
       await this.notify(idOf(reviewed.parentUserId), {
-        type: 'payment_review',
+        type: NOTIFICATION_TYPES.PAYMENT_REVIEW,
         title: 'تم تأكيد دفع الجلسة',
         message: 'تم اعتماد إيصال الدفع وتأكيد الجلسة. ستظهر لك تفاصيل الانضمام عند اقتراب الموعد.',
         resourceType: 'appointment',
-        resourceId: appointmentId
+        resourceId: appointmentId,
+        actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
       });
       await this.notify(idOf(reviewed.specialistUserId), {
-        type: 'appointment_decision',
+        type: NOTIFICATION_TYPES.APPOINTMENT_DECISION,
         title: 'تم تأكيد الجلسة بعد الدفع',
         message: 'اعتمدت الإدارة دفع الجلسة وأصبح الموعد مؤكدًا.',
         resourceType: 'appointment',
-        resourceId: appointmentId
+        resourceId: appointmentId,
+        actionUrl: `/specialist?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
       });
     } else {
       await this.notify(idOf(reviewed.parentUserId), {
-        type: 'payment_review',
+        type: NOTIFICATION_TYPES.PAYMENT_REVIEW,
         title: 'تم رفض إيصال الدفع',
         message: `تعذر اعتماد الإيصال. السبب: ${decisionNote}`,
         resourceType: 'appointment',
-        resourceId: appointmentId
+        resourceId: appointmentId,
+        actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
       });
     }
     return { payment: safePayment(reviewed.payment, appointmentId), appointmentStatus: reviewed.status };

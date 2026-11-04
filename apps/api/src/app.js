@@ -50,7 +50,8 @@ export function createApp({
   platformSettingsService,
   testimonialService,
   adminVideoTestService,
-  sessionPaymentService
+  sessionPaymentService,
+  roleService
 }) {
   const app = express();
 
@@ -166,7 +167,8 @@ export function createApp({
       testimonialService,
       appointmentService,
       adminVideoTestService,
-      sessionPaymentService
+      sessionPaymentService,
+      roleService
     }));
     app.use(`${API_PREFIX}/directory`, databaseMiddleware);
     app.use(`${API_PREFIX}/directory`, createDirectoryRouter({ repository, appointmentService }));

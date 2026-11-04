@@ -69,3 +69,7 @@ export const administratorCreateSchema = z.object({
 export const accountIdSchema = z.object({
   accountId: z.string().regex(/^[a-f\d]{24}$/i)
 }).strict();
+
+export const roleIdSchema = z.object({
+  roleId: z.string().regex(/^[a-f\d]{24}$/i)
+}).strict();

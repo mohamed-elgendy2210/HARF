@@ -104,12 +104,14 @@ export function GameAudio({
   prominent = false,
   muted = false,
   volume = 1,
+  autoPlayKey,
   onPlaybackStateChange
 }) {
   const [speaking, setSpeaking] = useState(false);
   const [audioError, setAudioError] = useState(false);
   const [audioState, setAudioState] = useState('');
   const audioRef = useRef(null);
+  const speakRef = useRef(null);
   const playbackStateCallback = useRef(onPlaybackStateChange);
   playbackStateCallback.current = onPlaybackStateChange;
 
@@ -126,6 +128,11 @@ export function GameAudio({
     setSpeaking(false);
     playbackStateCallback.current?.('stopped');
   }, [muted]);
+
+  useEffect(() => {
+    if (autoPlayKey === undefined || muted || disabled) return;
+    speakRef.current?.();
+  }, [autoPlayKey, disabled, muted]);
 
   const canSpeakText = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
   if (!audioUrl && !allowSpeech) return null;
@@ -176,6 +183,7 @@ export function GameAudio({
     setSpeaking(true);
     window.speechSynthesis.speak(utterance);
   };
+  speakRef.current = speak;
 
   const stop = () => {
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();

@@ -2,7 +2,9 @@ import { emitKeypressEvents } from 'node:readline';
 import { config } from '../config/env.js';
 import { connectMongo, disconnectMongo } from '../db/mongo.js';
 import { ensureAuthIndexes } from '../db/authRepository.js';
+import { ensureRoleIndexes, seedSystemRoles } from '../db/roleRepository.js';
 import { AuditEvent } from '../models/AuditEvent.js';
+import { Role } from '../models/Role.js';
 import { User } from '../models/User.js';
 import { createLogger } from '../lib/logger.js';
 import { hashPassword } from '../services/passwords.js';
@@ -62,6 +64,8 @@ async function main() {
   await connectMongo(config.mongodbUri, { isProduction: config.isProduction, logger });
   try {
     await ensureAuthIndexes();
+    await ensureRoleIndexes();
+    await seedSystemRoles();
     if (await User.exists({ role: 'admin' })) {
       throw new Error('An administrator already exists. Additional administrator provisioning is intentionally disabled in this bootstrap command.');
     }
@@ -78,6 +82,7 @@ async function main() {
       email,
       passwordHash: await hashPassword(password),
       role: 'admin',
+      adminRoleId: (await Role.findOne({ key: 'super-admin' }).select('_id').lean())._id,
       emailVerifiedAt: new Date(),
       approvalStatus: 'approved',
       accountStatus: 'active'

@@ -717,6 +717,7 @@ function GamePlay({ gameId }) {
                                   allowSpeech={false}
                                   prominent
                                   muted={muted}
+                                  autoPlayKey={started ? questionIndex : undefined}
                                   onPlaybackStateChange={(state) => {
                                     setAudioPlayed(state === 'ended');
                                     setAudioFailed(state === 'error' || state === 'stopped');
@@ -730,6 +731,7 @@ function GamePlay({ gameId }) {
                                 audioUrl={currentQuestion.promptAudioUrl ?? game.assets?.listening?.audioUrl}
                                 key={`question-audio-${questionIndex}`}
                                 muted={muted}
+                                autoPlayKey={started ? questionIndex : undefined}
                               />
                             )}
                           </div>

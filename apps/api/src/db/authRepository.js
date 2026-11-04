@@ -37,11 +37,11 @@ export function createAuthRepository() {
       return User.create(data);
     },
     findUserByEmail(email, includePassword = false) {
-      const query = User.findOne({ email });
+      const query = User.findOne({ email }).populate('adminRoleId');
       return includePassword ? query.select('+passwordHash') : query;
     },
     findUserById(id) {
-      return User.findById(id);
+      return User.findById(id).populate('adminRoleId');
     },
     listParentAccounts() {
       return User.find({ role: 'parent' })
@@ -126,7 +126,8 @@ export function createAuthRepository() {
     listAdministrators() {
       return User.find({ role: 'admin' })
         .sort({ createdAt: 1 })
-        .select('email role emailVerifiedAt approvalStatus accountStatus createdAt');
+        .populate('adminRoleId')
+        .select('email role adminRoleId emailVerifiedAt approvalStatus accountStatus createdAt');
     },
     countAdministrators() {
       return User.countDocuments({ role: 'admin' });

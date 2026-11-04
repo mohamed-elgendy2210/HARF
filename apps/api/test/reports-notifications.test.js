@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { reportRangeSchema } from '../src/validation/reports.js';
 import { NotificationService } from '../src/services/notificationService.js';
+import { Notification } from '../src/models/Notification.js';
 import { ReportService, reportCsvRows } from '../src/services/reportService.js';
 
 function createReportRepository() {
@@ -112,6 +113,8 @@ test('notifications are serialized without recipient data and read actions remai
       return notification;
     },
     listForRecipient: async (userId) => userId === recipient ? [notification] : [],
+    countUnread: async (userId) => userId === recipient && !notification.readAt ? 1 : 0,
+    countForRecipient: async (userId) => userId === recipient ? 1 : 0,
     markRead: async (id, userId, now) => id === 'notification-id' && userId === recipient
       ? { ...notification, readAt: now }
       : null,
@@ -139,11 +142,39 @@ test('notifications are serialized without recipient data and read actions remai
   assert.equal(stored.length, 1);
   assert.equal(listed.length, 1);
   assert.equal(listed[0].id, 'notification-id');
+  assert.equal(await service.unreadCount(recipient), 1);
+  assert.equal(await service.count(recipient), 1);
   assert.equal('recipientUserId' in listed[0], false);
   assert.deepEqual(otherUserNotifications, []);
   assert.equal(await service.markRead('another-parent', 'notification-id'), null);
   assert.ok((await service.markRead(recipient, 'notification-id')).readAt);
   assert.equal(emailSent, false);
+});
+
+test('notification indexes support recent lists, unread counts, and recipient-scoped deduplication', () => {
+  const indexes = Notification.schema.indexes();
+  assert.ok(indexes.some(([keys]) => keys.recipientUserId === 1 && keys.createdAt === -1 && keys._id === -1));
+  assert.ok(indexes.some(([keys]) => keys.recipientUserId === 1 && keys.readAt === 1));
+  assert.ok(indexes.some(([keys, options]) => keys.recipientUserId === 1
+    && keys.dedupeKey === 1 && options.unique && options.partialFilterExpression));
+});
+
+test('notification service rejects absolute and protocol-relative action URLs', async () => {
+  const service = new NotificationService({
+    repository: { create: async () => { throw new Error('must not persist an unsafe URL'); } },
+    authRepository: { findUserById: async () => null },
+    logger: { error() {} }
+  });
+  for (const actionUrl of ['https://outside.example', '//outside.example/path', '/\\\\outside.example']) {
+    await assert.rejects(service.notify('parent-id', {
+      type: 'system_notification',
+      title: 'تحديث',
+      message: 'رسالة آمنة.',
+      resourceType: 'account',
+      resourceId: '000000000000000000000001',
+      actionUrl
+    }), /relative to the application origin/);
+  }
 });
 
 test('notification persistence is not undone by an optional email delivery failure', async () => {

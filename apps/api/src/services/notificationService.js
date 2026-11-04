@@ -1,34 +1,55 @@
 export class NotificationService {
-  constructor({ repository, authRepository, emailService, logger }) {
+  constructor({ repository, authRepository, emailService, publisher, logger }) {
     this.repository = repository;
     this.authRepository = authRepository;
     this.emailService = emailService;
+    this.publisher = publisher;
     this.logger = logger;
   }
 
   async notify(recipientUserId, notification) {
+    if (notification.actionUrl
+      && (typeof notification.actionUrl !== 'string'
+        || !notification.actionUrl.startsWith('/')
+        || notification.actionUrl.startsWith('//')
+        || notification.actionUrl.includes('\\'))) {
+      throw new TypeError('Notification action URLs must be relative to the application origin.');
+    }
     const saved = await this.repository.create({
       recipientUserId,
       ...notification
     });
-    const recipient = await this.authRepository.findUserById(recipientUserId);
-    if (recipient?.email && this.emailService?.isConfigured()) {
-      try {
+    try {
+      await this.publisher?.publish(serializeNotification(saved));
+    } catch (error) {
+      this.logger?.error({ error, recipientUserId, notificationType: notification.type }, 'Notification real-time delivery failed.');
+    }
+    try {
+      const recipient = await this.authRepository.findUserById(recipientUserId);
+      if (recipient?.email && this.emailService?.isConfigured()) {
         await this.emailService.sendNotification({
           email: recipient.email,
           title: notification.title,
           message: notification.message
         });
-      } catch (error) {
-        this.logger.error({ error, recipientUserId, notificationType: notification.type }, 'Notification email delivery failed.');
       }
+    } catch (error) {
+      this.logger?.error({ error, recipientUserId, notificationType: notification.type }, 'Notification email delivery failed.');
     }
     return saved;
   }
 
-  async list(userId) {
-    const notifications = await this.repository.listForRecipient(userId);
+  async list(userId, options) {
+    const notifications = await this.repository.listForRecipient(userId, options);
     return notifications.map(serializeNotification);
+  }
+
+  unreadCount(userId) {
+    return this.repository.countUnread(userId);
+  }
+
+  count(userId) {
+    return this.repository.countForRecipient(userId);
   }
 
   async markRead(userId, notificationId, now = new Date()) {
@@ -52,6 +73,7 @@ function serializeNotification(notification) {
     message: record.message,
     resourceType: record.resourceType,
     resourceId: String(record.resourceId),
+    actionUrl: record.actionUrl ?? null,
     readAt: record.readAt ?? null,
     createdAt: record.createdAt
   };

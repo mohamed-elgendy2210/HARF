@@ -35,6 +35,8 @@ import { createAdminVideoTestRepository, ensureAdminVideoTestIndexes } from './d
 import { AdminVideoTestService } from './services/adminVideoTestService.js';
 import { createSessionPaymentRepository, ensureSessionPaymentIndexes } from './db/sessionPaymentRepository.js';
 import { SessionPaymentService } from './services/sessionPaymentService.js';
+import { createRoleRepository, ensureRoleIndexes, seedSystemRoles } from './db/roleRepository.js';
+import { RoleService } from './services/roleService.js';
 
 const logger = createLogger({ level: config.logLevel, isProduction: config.isProduction });
 
@@ -43,6 +45,7 @@ async function start() {
   if (databaseConnected) {
     await Promise.all([
       ensureAuthIndexes(),
+      ensureRoleIndexes(),
       ensureChildIndexes(),
       ensureGameIndexes(),
       ensureSubscriptionIndexes(),
@@ -55,11 +58,16 @@ async function start() {
       ensureAdminVideoTestIndexes(),
       ensureSessionPaymentIndexes()
     ]);
+    await seedSystemRoles();
     await seedGameLibrary();
     await seedLearningPath();
   }
 
   const repository = createAuthRepository();
+  const roleService = new RoleService({
+    repository: createRoleRepository(),
+    authRepository: repository
+  });
   const specialistDocumentService = new SpecialistDocumentService({
     storageDirectory: path.join(config.mediaStorageDir, 'specialist-verification')
   });
@@ -154,7 +162,9 @@ async function start() {
     gameRepository,
     childService,
     subscriptionService,
-    authService
+    authService,
+    notificationService,
+    logger
   });
   const gameLibraryService = new GameLibraryService({
     repository: gameLibraryRepository,
@@ -187,7 +197,8 @@ async function start() {
     specialistDocumentService,
     platformSettingsService: databaseConnected ? platformSettingsService : null,
     adminVideoTestService: databaseConnected ? adminVideoTestService : null,
-    sessionPaymentService: databaseConnected ? sessionPaymentService : null
+    sessionPaymentService: databaseConnected ? sessionPaymentService : null,
+    roleService
   });
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port }, 'Harf API listening.');

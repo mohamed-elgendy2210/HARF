@@ -3,6 +3,7 @@ import { AppError } from '../middleware/errors.js';
 import { isReadableName } from '../lib/nameValidation.js';
 import { safeError } from '../lib/logger.js';
 import { hashPassword, verifyPassword } from './passwords.js';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const VERIFICATION_LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -51,6 +52,14 @@ export function getDirectoryEligibility(user) {
 export function serializeAccount(user) {
   if (!user) return null;
   const record = typeof user.toObject === 'function' ? user.toObject() : user;
+  const adminRole = record.adminRoleId && typeof record.adminRoleId === 'object'
+    && Array.isArray(record.adminRoleId.permissions)
+    ? {
+        key: record.adminRoleId.key,
+        name: record.adminRoleId.name,
+        permissions: [...record.adminRoleId.permissions]
+      }
+    : undefined;
   const professionalProfile = record.role === 'specialist' ? {
     displayName: record.professionalProfile?.displayName ?? '',
     specialty: record.professionalProfile?.specialty ?? '',
@@ -76,7 +85,9 @@ export function serializeAccount(user) {
       parentProfile: { displayName: record.parentProfile?.displayName ?? '' }
     } : {}),
     ...(record.role === 'admin' ? {
-      adminProfile: { displayName: record.adminProfile?.displayName ?? '' }
+      adminProfile: { displayName: record.adminProfile?.displayName ?? '' },
+      adminRole: adminRole ?? null,
+      permissions: adminRole?.permissions ?? []
     } : {}),
     ...(professionalProfile ? { professionalProfile } : {})
   };
@@ -197,6 +208,15 @@ export class AuthService {
         metadata: { role }
       });
       const session = await this.createSession(user);
+      await this.notifyAdministrators({
+        type: NOTIFICATION_TYPES.ACCOUNT_PENDING_REVIEW,
+        title: role === 'specialist' ? 'أخصائي جديد بانتظار الاعتماد' : 'حساب جديد بانتظار الاعتماد',
+        message: 'يوجد طلب حساب جديد بانتظار مراجعة الإدارة.',
+        resourceType: 'account',
+        resourceId: user._id ?? user.id,
+        dedupeKey: `pending-account:${user._id ?? user.id}`,
+        actionUrl: '/admin?view=accounts'
+      });
       return { user: serializeAccount(user), session };
     } catch (error) {
       await this.repository.deleteAuthTokens(user._id ?? user.id);
@@ -255,6 +275,15 @@ export class AuthService {
     await this.recordAudit('account.email_verified', {
       actorUserId: user._id ?? user.id,
       targetUserId: user._id ?? user.id
+    });
+    await this.notify(user._id ?? user.id, {
+      type: NOTIFICATION_TYPES.EMAIL_VERIFIED,
+      title: 'تم توثيق بريدك الإلكتروني',
+      message: 'تم تأكيد بريدك الإلكتروني بنجاح.',
+      resourceType: 'account',
+      resourceId: user._id ?? user.id,
+      dedupeKey: `email-verified:${user._id ?? user.id}`,
+      actionUrl: user.role === 'specialist' ? '/specialist?section=profile' : '/dashboard'
     });
     return serializeAccount(user);
   }
@@ -439,7 +468,7 @@ export class AuthService {
     return users.map(serializeAccount);
   }
 
-  async createAdministrator(actor, { email, password }) {
+  async createAdministrator(actor, { email, password }, adminRole) {
     const normalizedEmail = normalizeEmail(email);
     if (await this.repository.countExistingEmail(normalizedEmail)) {
       throw new AppError(409, 'EMAIL_ALREADY_REGISTERED', 'هذا البريد الإلكتروني مرتبط بحساب موجود.');
@@ -450,6 +479,7 @@ export class AuthService {
         email: normalizedEmail,
         passwordHash: await hashPassword(password),
         role: 'admin',
+        adminRoleId: adminRole._id ?? adminRole.id,
         emailVerifiedAt: this.now(),
         approvalStatus: 'approved',
         accountStatus: 'active'
@@ -464,13 +494,18 @@ export class AuthService {
       actorUserId: actor._id ?? actor.id,
       targetUserId: administrator._id ?? administrator.id
     });
-    return serializeAccount(administrator);
+    const account = typeof administrator.toObject === 'function' ? administrator.toObject() : administrator;
+    return serializeAccount({ ...account, adminRoleId: adminRole });
   }
 
   async deleteAdministrator(actor, targetUserId) {
     const actorId = String(actor._id ?? actor.id);
     if (actorId === String(targetUserId)) {
       throw new AppError(400, 'SELF_DELETION_NOT_ALLOWED', 'لا يمكنك حذف حساب المسؤول الذي تستخدمه حاليًا.');
+    }
+    const target = await this.repository.findUserById(targetUserId);
+    if (target?.adminRoleId?.key === 'super-admin') {
+      throw new AppError(409, 'PROTECTED_ADMINISTRATOR', 'لا يمكن حذف مسؤول النظام الأعلى.');
     }
     const administratorCount = await this.repository.countAdministrators();
     if (administratorCount <= 1) {
@@ -513,19 +548,41 @@ export class AuthService {
     if (this.notificationService) {
       try {
         await this.notificationService.notify(targetUserId, {
-          type: 'account_approval',
-          title: approvalStatus === 'approved' ? 'تم اعتماد حسابك' : 'تحديث حالة الحساب',
+          type: approvalStatus === 'approved' ? NOTIFICATION_TYPES.ACCOUNT_APPROVED : NOTIFICATION_TYPES.ACCOUNT_REJECTED,
+          title: approvalStatus === 'approved' ? 'تم اعتماد حسابك' : 'تم رفض طلب حسابك',
           message: approvalStatus === 'approved'
             ? 'تم اعتماد حسابك ويمكنك استخدام خدمات حرف المتاحة لدورك.'
             : 'تم رفض طلب الحساب. تواصل مع إدارة حرف عند الحاجة.',
           resourceType: 'account',
-          resourceId: targetUserId
+          resourceId: targetUserId,
+          dedupeKey: `account-status:${targetUserId}:${approvalStatus}`,
+          actionUrl: '/dashboard'
         });
       } catch (error) {
         this.logger.error({ error, targetUserId }, 'Account approval notification could not be saved.');
       }
     }
     return serializeAccount(updatedUser);
+  }
+
+  async notifyAdministrators(notification) {
+    try {
+      const administrators = await this.repository.listActiveAdministrators();
+      await Promise.all(administrators.map((administrator) => this.notificationService?.notify(
+        administrator._id ?? administrator.id,
+        notification
+      )));
+    } catch (error) {
+      this.logger?.error({ error, notificationType: notification.type }, 'Administrator notification could not be saved.');
+    }
+  }
+
+  async notify(recipientUserId, notification) {
+    try {
+      await this.notificationService?.notify(recipientUserId, notification);
+    } catch (error) {
+      this.logger?.error({ error, recipientUserId, notificationType: notification.type }, 'Account notification could not be saved.');
+    }
   }
 
   async deletePendingAccount(actor, targetUserId) {

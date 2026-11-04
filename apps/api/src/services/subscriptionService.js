@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 import { randomUUID } from 'node:crypto';
 
 const METHOD_NAMES = Object.freeze({
@@ -365,14 +366,17 @@ export class SubscriptionService {
     });
     if (this.notificationService) {
       try {
-        const administrator = await this.authRepository.findAdministrator?.();
-        if (administrator) {
+        const administrators = await this.authRepository.listActiveAdministrators?.()
+          ?? [await this.authRepository.findAdministrator?.()].filter(Boolean);
+        for (const administrator of administrators) {
           await this.notify(administrator._id ?? administrator.id, {
-            type: 'payment_review',
+            type: NOTIFICATION_TYPES.PAYMENT_REVIEW,
             title: 'طلب دفع جديد',
             message: 'يوجد طلب دفع جديد بانتظار المراجعة اليدوية.',
             resourceType: 'payment',
-            resourceId: payment._id ?? payment.id
+            resourceId: payment._id ?? payment.id,
+            dedupeKey: `subscription-payment-review:${payment._id ?? payment.id}`,
+            actionUrl: '/admin?view=subscriptions'
           });
         }
       } catch (error) {
@@ -482,13 +486,16 @@ export class SubscriptionService {
         subscriptionId: subscription ? String(subscription._id ?? subscription.id) : null
       });
       await this.notify(payment.parentUserId, {
-        type: 'payment_review',
-        title: finalDecision === 'approved' ? 'تم تأكيد الدفع' : 'تم رفض طلب الدفع',
+        type: finalDecision === 'approved' ? NOTIFICATION_TYPES.SUBSCRIPTION_STATUS : NOTIFICATION_TYPES.PAYMENT_REVIEW,
+        title: finalDecision === 'approved' ? 'تم تأكيد اشتراكك' : 'تم رفض طلب الدفع',
         message: finalDecision === 'approved'
           ? 'تمت مراجعة التحويل يدويًا وتفعيل الاشتراك.'
           : 'تمت مراجعة طلب الدفع ورفضه. راجع تفاصيله من لوحة الأسرة.',
-        resourceType: 'payment',
-        resourceId: paymentId
+        resourceType: finalDecision === 'approved' ? 'subscription' : 'payment',
+        resourceId: finalDecision === 'approved' && subscription
+          ? subscription._id ?? subscription.id
+          : paymentId,
+        actionUrl: '/dashboard?section=payments'
       });
       return {
         payment: serializePayment(reviewed),

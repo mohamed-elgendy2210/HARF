@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest, getApiUrl } from '../lib/api.js';
 import { displayNameOrFallback } from '../lib/displayName.js';
 import NotificationCenter from './NotificationCenter.jsx';
+import NotificationBell from './NotificationBell.jsx';
 import ParentTestimonials from './ParentTestimonials.jsx';
 import AppointmentMeeting, { AppointmentJoinButton } from './appointments/AppointmentMeeting.jsx';
 
@@ -2523,7 +2524,10 @@ export default function ParentDashboard({
             <span className="dashboard-eyebrow">حرف · مساحة الأسرة</span>
             <h2>{sectionTitles[section]}</h2>
           </div>
-          {selectedChild && <span className="parent-dashboard__active-child">الملف الحالي: <strong>{selectedChild.displayName}</strong></span>}
+          <div className="parent-dashboard__header-actions">
+            {selectedChild && <span className="parent-dashboard__active-child">الملف الحالي: <strong>{selectedChild.displayName}</strong></span>}
+            <NotificationBell onOpenNotifications={() => selectSection('notifications')} />
+          </div>
         </header>
         {notice && <p className="auth-message" role="status">{notice}</p>}
         {error && (

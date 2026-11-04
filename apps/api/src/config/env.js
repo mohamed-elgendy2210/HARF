@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { setServers } from 'node:dns';
 import { isIP } from 'node:net';
 import path from 'node:path';
 import dotenv from 'dotenv';
@@ -12,6 +13,7 @@ const envSchema = z.object({
   HOST: z.string().trim().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   MONGODB_URI: z.string().trim().optional(),
+  MONGODB_DNS_SERVERS: z.string().default(''),
   APP_ORIGIN: z.string().url().default('http://localhost:5173'),
   CLIENT_ORIGINS: z.string().default('http://localhost:5173'),
   MEDIA_STORAGE_DIR: z.string().trim().optional(),
@@ -72,6 +74,11 @@ if (!parsed.success) {
 }
 
 const values = parsed.data;
+const mongodbDnsServers = values.MONGODB_DNS_SERVERS.split(',').map((server) => server.trim()).filter(Boolean);
+if (mongodbDnsServers.some((server) => isIP(server) === 0)) {
+  throw new Error('MONGODB_DNS_SERVERS must contain comma-separated DNS server IP addresses.');
+}
+if (mongodbDnsServers.length) setServers(mongodbDnsServers);
 const jitsiDomain = values.JITSI_DOMAIN.toLowerCase();
 if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(jitsiDomain)) {
   throw new Error('JITSI_DOMAIN must be a hostname without a scheme, port, or path.');

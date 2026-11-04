@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../lib/api.js';
 import { displayNameOrFallback } from '../lib/displayName.js';
 import NotificationCenter from './NotificationCenter.jsx';
+import NotificationBell from './NotificationBell.jsx';
 import AppointmentMeeting, { AppointmentJoinButton } from './appointments/AppointmentMeeting.jsx';
 
 const days = [
@@ -327,7 +328,10 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
             <span className="dashboard-eyebrow">حرف · الأخصائيون</span>
             <h2>{section === 'availability' ? 'مواعيدك المتاحة' : section === 'profile' ? 'تعديل الملف الشخصي' : section === 'notifications' ? 'الإشعارات' : 'طلبات وسجل المواعيد'}</h2>
           </div>
-          <button className="button button--small button--outline" type="button" onClick={onSignOut}>تسجيل الخروج</button>
+          <div className="dashboard-main__header-actions">
+            <NotificationBell onOpenNotifications={() => setSection('notifications')} />
+            <button className="button button--small button--outline" type="button" onClick={onSignOut}>تسجيل الخروج</button>
+          </div>
         </header>
 
         {!approvedProfile && (

@@ -8,13 +8,36 @@ No hosting provider, domain, TLS terminator, or production topology has been sel
 
 1. Install Node.js 22.12 or newer and npm 10 or newer.
 2. Copy `.env.example` to `.env`; do not commit `.env`.
-3. Optionally start MongoDB locally and set `MONGODB_URI=mongodb://127.0.0.1:27017/harf`. The API can start without a database in development, but readiness remains 503 until one is connected.
+3. Optionally start MongoDB locally and set `MONGODB_URI=mongodb://127.0.0.1:27017/harf`. For Atlas, set the private `MONGODB_URI` in `.env`. If the operating system resolver cannot resolve Atlas SRV/TXT records, optionally set `MONGODB_DNS_SERVERS` to a reachable DNS resolver IP (for example, `8.8.8.8`); this applies to the Node process only. The API can start without a database in development, but readiness remains 503 until one is connected.
 4. Run `npm install`, then `npm run dev`.
 5. Open the Vite URL printed by the development server. Local HTTP is supported for development only; use synthetic credentials/data and never submit real passwords, child records, payment evidence, or consultation information over plain HTTP.
 6. Configure a test SMTP account in `.env` to exercise email verification and password recovery. Account APIs clearly return 503 if MongoDB is unavailable.
 7. After MongoDB is running and `MONGODB_URI` is configured, provision the first administrator with `npm run admin:create --workspace @harf/api` in an interactive terminal. The password prompt does not echo input; no admin can be created over HTTP.
 
 Vite uses the hostname/port from `APP_ORIGIN` and proxies same-origin `/api` requests to `VITE_DEV_API_TARGET`. It uses a strict port so it fails rather than silently switching to an origin not allowed by the API CORS list. Set `APP_ORIGIN`, `CLIENT_ORIGINS`, and `VITE_DEV_API_TARGET` consistently if local addresses change. The API URL is not embedded in page components.
+
+## MongoDB Atlas migration and rollback
+
+The API connects through Mongoose in `apps/api/src/db/mongo.js`; only the API server connects to MongoDB. It always selects the existing `harf` database, regardless of whether the URI includes a database path. The React app continues to use the API and must not receive database credentials.
+
+1. Rotate any Atlas database password that has been shared or exposed. Create/store the replacement URI in the untracked root `.env` or deployment secret manager; never put real credentials in `.env.example`, source, or Git. URL-encode special characters in the username or password.
+2. Before switching, take a protected backup of the local database. From PowerShell, use a private backup path and the existing local database:
+
+   ```powershell
+   mongodump --uri="mongodb://127.0.0.1:27017/harf" --db=harf --out="D:\private-backups\harf"
+   ```
+
+3. Restore to the Atlas database using the rotated URI ending in `/harf`. Confirm the target database is appropriate before restoring. Do not use `--drop`; keep the local database and backup untouched:
+
+   ```powershell
+   mongorestore --uri="<rotated Atlas URI ending in /harf>" --nsInclude="harf.*" "D:\private-backups\harf\harf"
+   ```
+
+4. Compare every collection's document count between local and Atlas, verify expected indexes, and investigate any restore errors before switching the application. Do not accept the migration solely because the API starts.
+5. After verification, set `MONGODB_URI` in the untracked root `.env` to the rotated Atlas URI, restart the API, and check `GET /api/v1/health/ready` and application flows against Atlas. Mongoose startup checks the existing indexes; it does not change the schema.
+6. To roll back, change `.env` back to `MONGODB_URI=mongodb://127.0.0.1:27017/harf` and restart the API. The local database is not removed by this process.
+
+The migration has not been run by this repository change. Keep the backup private and retain it until data counts, indexes, and application behavior have been checked against Atlas.
 
 For secure browser testing, set `APP_ORIGIN` and `CLIENT_ORIGINS` to the exact HTTPS origin, then provide both `VITE_HTTPS_KEY_FILE` and `VITE_HTTPS_CERT_FILE` in the untracked `.env` with paths to a trusted local certificate/key pair. Vite loads the files only in development server mode; the key must stay outside source control. Use a hostname covered by the certificate. Configure the API proxy target to the API/reverse-proxy URL used in that test. No certificate, private key, or self-signed trust bypass is included in the repository.
 

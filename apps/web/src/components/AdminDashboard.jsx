@@ -4,9 +4,11 @@ import { displayNameOrFallback } from '../lib/displayName.js';
 import AdminReports from './AdminReports.jsx';
 import AdminLearningPaths from './AdminLearningPaths.jsx';
 import NotificationCenter from './NotificationCenter.jsx';
+import NotificationBell from './NotificationBell.jsx';
 import AdminTestimonials from './AdminTestimonials.jsx';
 import AdminSessions from './AdminSessions.jsx';
 import AdminSessionPayments from './AdminSessionPayments.jsx';
+import AdminRoles from './AdminRoles.jsx';
 
 const AdminGameLibrary = lazy(() => import('./AdminGameLibrary.jsx'));
 
@@ -14,6 +16,7 @@ const views = [
   { id: 'overview', label: 'نظرة عامة', icon: '⌂' },
   { id: 'accounts', label: 'إدارة الحسابات', icon: '♙' },
   { id: 'administrators', label: 'مديرو المنصة', icon: '♜' },
+  { id: 'roles', label: 'الأدوار والصلاحيات', icon: '⚿' },
   { id: 'games', label: 'مكتبة الألعاب', icon: '✦' },
   { id: 'trialGames', label: 'الألعاب التجريبية للزوار', icon: '☆' },
   { id: 'assets', label: 'مكتبة الوسائط', icon: '▧' },
@@ -59,7 +62,32 @@ const viewTitles = {
   sessionPayments: 'مدفوعات الجلسات',
   reports: 'تقارير المنصة',
   notifications: 'الإشعارات',
-  profile: 'تعديل الملف الشخصي'
+  profile: 'تعديل الملف الشخصي',
+  roles: 'الأدوار والصلاحيات'
+};
+
+const viewPermissions = {
+  overview: ['users.view'],
+  accounts: ['users.view'],
+  administrators: ['users.view'],
+  roles: ['roles.manage'],
+  games: ['activities.manage'],
+  trialGames: ['activities.manage'],
+  assets: ['activities.manage'],
+  learningPath: ['learningPaths.manage'],
+  subscriptions: ['subscriptions.manage'],
+  platform: ['settings.manage'],
+  testimonials: ['testimonials.manage'],
+  sessions: ['bookings.view', 'sessions.manage'],
+  sessionPayments: ['payments.view'],
+  reports: ['reports.financial'],
+  notifications: ['notifications.manage']
+};
+const viewAllPermissions = {
+  subscriptions: ['payments.view', 'payments.verify', 'subscriptions.manage', 'children.view'],
+  sessionPayments: ['payments.view', 'payments.verify'],
+  sessions: ['bookings.view', 'sessions.manage'],
+  reports: ['reports.view', 'reports.financial']
 };
 
 function accountDisplayName(account) {
@@ -90,6 +118,15 @@ function priceToMinorUnits(value) {
 }
 
 export default function AdminDashboard({ user, onSignOut, onReauthenticate, onProfileUpdated }) {
+  const permissions = user.permissions ?? [];
+  const hasPermission = (permission) => permissions.includes(permission);
+  const visibleViews = useMemo(() => views.filter((item) => (
+    item.id === 'profile'
+    || item.id === 'notifications'
+    || (viewAllPermissions[item.id]
+      ? viewAllPermissions[item.id].every((permission) => hasPermission(permission))
+      : (viewPermissions[item.id] ?? []).some((permission) => hasPermission(permission)))
+  )), [permissions]);
   const [accounts, setAccounts] = useState([]);
   const [administrators, setAdministrators] = useState([]);
   const [administratorEmail, setAdministratorEmail] = useState('');
@@ -97,7 +134,10 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
   const [view, setView] = useState(() => {
     const params = new URLSearchParams(window.location.search);
     const hashParams = new URLSearchParams(window.location.hash.slice(1));
-    return params.get('view') === 'sessions' || hashParams.has('participantToken') ? 'sessions' : 'overview';
+    const requestedView = params.get('view');
+    return hashParams.has('participantToken')
+      ? 'sessions'
+      : views.some(({ id }) => id === requestedView) ? requestedView : 'overview';
   });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [filter, setFilter] = useState('all');
@@ -184,8 +224,15 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
   };
 
   useEffect(() => {
-    loadAccounts();
+    if (hasPermission('users.view')) loadAccounts();
+    else setLoading(false);
   }, []);
+
+  useEffect(() => {
+    if (!visibleViews.some((item) => item.id === view)) {
+      setView(visibleViews[0]?.id ?? 'profile');
+    }
+  }, [visibleViews, view]);
 
   useEffect(() => {
     if (view !== 'administrators') return undefined;
@@ -563,7 +610,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
                 ? 'مستوفاة'
                 : 'غير مستوفاة — راجع البريد والاعتماد والملف والوثائق وخيار النشر'}
             </span>
-            {profile?.identityDocumentsComplete && (
+            {hasPermission('therapists.approve') && profile?.identityDocumentsComplete && (
               <div className="admin-dashboard-account__documents">
                 {['photo', 'front', 'back'].map((documentType) => (
                   <a
@@ -581,7 +628,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
         )}
 
         <div className="admin-dashboard-account__actions">
-          {account.approvalStatus !== 'approved' && (
+          {hasPermission('users.approve') && account.approvalStatus !== 'approved' && (
             <button
               type="button"
               className="button button--small button--primary"
@@ -591,7 +638,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
               اعتماد
             </button>
           )}
-          {account.approvalStatus !== 'rejected' && (
+          {hasPermission('users.approve') && account.approvalStatus !== 'rejected' && (
             <button
               type="button"
               className="button button--small button--outline"
@@ -601,7 +648,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
               رفض
             </button>
           )}
-          {account.approvalStatus === 'pending' && (
+          {hasPermission('users.delete') && account.approvalStatus === 'pending' && (
             <button
               type="button"
               className="button button--small button--outline"
@@ -611,7 +658,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
               إزالة الطلب
             </button>
           )}
-          {String(account.id) !== String(user.id) && account.accountStatus !== 'suspended' && (
+          {hasPermission('users.disable') && String(account.id) !== String(user.id) && account.accountStatus !== 'suspended' && (
             <button
               type="button"
               className="button button--small button--outline"
@@ -621,7 +668,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
               إيقاف
             </button>
           )}
-          {account.accountStatus === 'suspended' && (
+          {hasPermission('users.disable') && account.accountStatus === 'suspended' && (
             <button
               type="button"
               className="button button--small button--outline"
@@ -651,7 +698,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
           </button>
         </div>
         <nav id="admin-dashboard-navigation">
-          {views.map((item) => (
+          {visibleViews.map((item) => (
             <button
               type="button"
               className={view === item.id ? 'admin-dashboard-nav is-active' : 'admin-dashboard-nav'}
@@ -681,6 +728,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
           </div>
           <div className="admin-dashboard__topbar-actions">
             <span className="admin-dashboard__identity">{user.adminProfile?.displayName || user.email}</span>
+            <NotificationBell onOpenNotifications={() => setView('notifications')} />
             <a className="button button--small button--outline" href="/">العودة للموقع</a>
             <button type="button" className="button button--small button--primary" onClick={onSignOut}>تسجيل الخروج</button>
           </div>
@@ -709,6 +757,12 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
           <AdminSessions />
         ) : view === 'sessionPayments' ? (
           <AdminSessionPayments onOpenNotifications={() => setView('notifications')} />
+        ) : view === 'roles' ? (
+          <AdminRoles
+            canManagePermissions={hasPermission('permissions.manage')}
+            canManageRoles={hasPermission('roles.manage')}
+            canViewUsers={hasPermission('users.view')}
+          />
         ) : view === 'administrators' ? (
           <section className="admin-dashboard__content admin-dashboard-panel">
             <div className="admin-dashboard-panel__heading">
@@ -717,7 +771,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
                 <p>أضف حساب مسؤول مستقلًا أو أزل حسابًا آخر. لا يمكن حذف حسابك الحالي أو آخر مسؤول.</p>
               </div>
             </div>
-            <form className="admin-administrator-form" onSubmit={createAdministrator}>
+            {hasPermission('users.create') && <form className="admin-administrator-form" onSubmit={createAdministrator}>
               <h3>إضافة مسؤول</h3>
               <label>البريد الإلكتروني
                 <input type="email" autoComplete="email" required maxLength={254}
@@ -731,7 +785,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
                 {busyAccountId === 'new-administrator' ? 'جارٍ الإنشاء…' : 'إنشاء حساب مسؤول'}
               </button>
               <small>سيكون الحساب نشطًا ومفعّلًا فورًا. استخدم كلمة مرور مؤقتة فريدة وشاركها عبر قناة آمنة فقط.</small>
-            </form>
+            </form>}
             <div className="admin-administrator-list-heading">
               <h3>الحسابات الإدارية</h3>
               <span>{administrators.length} مسؤولين</span>
@@ -748,6 +802,7 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
                           {administrator.emailVerified ? ' · البريد مفعّل' : ' · البريد غير مفعّل'}</small>
                       </div>
                       {String(administrator.id) === String(user.id) ? <span className="admin-path-status admin-path-status--published">أنت</span>
+                        : !hasPermission('users.delete') ? null
                         : <button type="button" className="button button--small button--outline"
                           disabled={Boolean(busyAccountId) || administrators.length <= 1}
                           onClick={() => void deleteAdministrator(administrator)}>حذف المسؤول</button>}

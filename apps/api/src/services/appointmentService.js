@@ -11,6 +11,7 @@ import {
 } from '../lib/appointmentTime.js';
 import { hasSpecialistVerificationDocuments, isProfessionalProfileComplete } from './authService.js';
 import { isReadableName } from '../lib/nameValidation.js';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 
 const APPOINTMENT_REQUEST_LIFETIME_MS = 48 * 60 * 60 * 1000;
 const MINIMUM_APPOINTMENT_NOTICE_MS = 48 * 60 * 60 * 1000;
@@ -169,18 +170,22 @@ export class AppointmentService {
           const appointment = await this.repository.claimExpiredPaymentNotification?.(candidate._id, now);
           if (!appointment) continue;
           await this.notify(appointment.parentUserId, {
-            type: 'appointment_decision',
+            type: NOTIFICATION_TYPES.APPOINTMENT_DECISION,
             title: 'انتهت مهلة الدفع',
             message: 'انتهت مهلة دفع الجلسة وتم تحرير الموعد. يمكنك اختيار موعد آخر.',
             resourceType: 'appointment',
-            resourceId: idOf(appointment)
+            resourceId: idOf(appointment),
+            dedupeKey: `appointment-request:${idOf(appointment)}`,
+            actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(idOf(appointment))}`
           });
           await this.notify(appointment.specialistUserId, {
-            type: 'appointment_decision',
+            type: NOTIFICATION_TYPES.APPOINTMENT_DECISION,
             title: 'انتهت مهلة دفع الموعد',
             message: 'انتهت مهلة الدفع لطلب الموعد وتم تحرير الوقت المتاح.',
             resourceType: 'appointment',
-            resourceId: idOf(appointment)
+            resourceId: idOf(appointment),
+            dedupeKey: `appointment-request:${idOf(appointment)}`,
+            actionUrl: `/specialist?section=appointments&appointmentId=${encodeURIComponent(idOf(appointment))}`
           });
         }
       } catch (error) {
@@ -364,12 +369,26 @@ export class AppointmentService {
         durationMinutes: slot.durationMinutes
       });
       await this.notify(input.specialistId, {
-        type: 'appointment_request',
+        type: NOTIFICATION_TYPES.APPOINTMENT_REQUEST,
         title: 'طلب موعد جديد',
         message: 'لديك طلب موعد جديد بانتظار قرارك.',
         resourceType: 'appointment',
-        resourceId: idOf(appointment)
+        resourceId: idOf(appointment),
+        actionUrl: `/specialist?section=appointments&appointmentId=${encodeURIComponent(idOf(appointment))}`
       });
+      try {
+        const administrators = await this.authRepository.listActiveAdministrators?.() ?? [];
+        await Promise.all(administrators.map((administrator) => this.notify(idOf(administrator), {
+          type: NOTIFICATION_TYPES.APPOINTMENT_REQUEST,
+          title: 'طلب جلسة جديد',
+          message: 'تم إنشاء طلب جلسة جديد ويجري متابعته من الأخصائي.',
+          resourceType: 'appointment',
+          resourceId: idOf(appointment),
+          actionUrl: '/admin?view=sessions'
+        })));
+      } catch (error) {
+        this.logger?.error({ error, appointmentId: idOf(appointment) }, 'Administrator appointment notifications could not be loaded.');
+      }
       return serializeAppointment(appointment, 'parent');
     } catch (error) {
       if (error.code === 11000) {
@@ -600,7 +619,7 @@ export class AppointmentService {
     }
     if (decision !== 'accepted' || payment || !appointment.meeting?.roomName) {
       await this.notify(updated.parentUserId, {
-        type: 'appointment_decision',
+        type: NOTIFICATION_TYPES.APPOINTMENT_DECISION,
         title: decision === 'accepted'
           ? payment ? 'وافق الأخصائي على طلب الجلسة' : 'تم تأكيد الموعد'
           : 'تم رفض طلب الموعد',
@@ -610,7 +629,8 @@ export class AppointmentService {
             : 'وافق الأخصائي على طلب الموعد.'
           : 'لم يتم قبول طلب الموعد. يمكنك اختيار موعد آخر.',
         resourceType: 'appointment',
-        resourceId: appointmentId
+        resourceId: appointmentId,
+        actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
       });
     }
     return this.serializeForViewer(appointment, 'specialist');
@@ -675,11 +695,12 @@ export class AppointmentService {
       sessionSpecialistNoShowAt: now
     });
     await this.notify(updated.specialistUserId, {
-      type: 'session_report',
+      type: NOTIFICATION_TYPES.SESSION_REPORT,
       title: 'أبلغ ولي الأمر عن عدم حضور الأخصائي',
       message: 'أبلغ ولي الأمر عن عدم حضور الأخصائي للموعد. راجع سجل المواعيد للتفاصيل.',
       resourceType: 'appointment',
-      resourceId: appointmentId
+      resourceId: appointmentId,
+      actionUrl: `/specialist?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
     });
     return serializeAppointment(updated, 'parent');
   }
@@ -713,13 +734,14 @@ export class AppointmentService {
       sessionEndedAt: now
     });
     await this.notify(updated.parentUserId, {
-      type: 'session_report',
+      type: NOTIFICATION_TYPES.SESSION_REPORT,
       title: 'تم إنهاء الجلسة',
       message: parentReport
         ? 'أنهى الأخصائي الجلسة وأعدّ ملخصًا تعليميًا متاحًا في لوحة الأسرة.'
         : 'أنهى الأخصائي الجلسة.',
       resourceType: 'appointment',
-      resourceId: appointmentId
+      resourceId: appointmentId,
+      actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
     });
     return serializeAppointment(updated, 'specialist');
   }
@@ -749,11 +771,12 @@ export class AppointmentService {
       sessionNoShowAt: now
     });
     await this.notify(updated.parentUserId, {
-      type: 'session_report',
+      type: NOTIFICATION_TYPES.SESSION_REPORT,
       title: 'لم يحضر الطفل الجلسة',
       message: 'سجّل الأخصائي عدم حضور الطفل للموعد. يمكنك مراجعة سجل المواعيد لمزيد من التفاصيل.',
       resourceType: 'appointment',
-      resourceId: appointmentId
+      resourceId: appointmentId,
+      actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
     });
     return serializeAppointment(updated, 'specialist');
   }
@@ -872,13 +895,17 @@ export class AppointmentService {
 
   async notifyMeetingReady(appointment) {
     const appointmentLabel = appointmentLocalLabel(appointment.startsAt, appointment.timeZone);
-    for (const recipientUserId of [appointment.parentUserId, appointment.specialistUserId]) {
+    for (const [recipientUserId, actionUrl] of [
+      [appointment.parentUserId, '/dashboard?section=appointments'],
+      [appointment.specialistUserId, `/specialist?section=appointments&appointmentId=${encodeURIComponent(idOf(appointment))}`]
+    ]) {
       await this.notify(recipientUserId, {
-        type: 'appointment_decision',
+        type: NOTIFICATION_TYPES.APPOINTMENT_DECISION,
         title: 'تم تأكيد الموعد والجلسة المرئية',
         message: `تم تأكيد الموعد يوم ${appointmentLabel}. تفاصيل الانضمام متاحة من لوحة المواعيد.`,
         resourceType: 'appointment',
-        resourceId: idOf(appointment)
+        resourceId: idOf(appointment),
+        actionUrl
       });
     }
   }

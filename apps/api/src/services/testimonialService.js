@@ -1,4 +1,5 @@
 import { AppError } from '../middleware/errors.js';
+import { NOTIFICATION_TYPES } from './notificationTypes.js';
 
 function serialize(testimonial) {
   const record = typeof testimonial.toObject === 'function' ? testimonial.toObject() : testimonial;
@@ -52,11 +53,12 @@ export class TestimonialService {
       throw error;
     }
     const notificationResults = await Promise.allSettled(admins.map((admin) => this.notificationService.notify(admin._id, {
-      type: 'testimonial_submitted',
+      type: NOTIFICATION_TYPES.TESTIMONIAL_SUBMITTED,
       title: 'رأي جديد بانتظار المراجعة',
       message: 'أرسل ولي أمر رأيًا جديدًا للمنصة. راجعه من قسم آراء أولياء الأمور.',
       resourceType: 'testimonial',
-      resourceId: testimonial._id ?? testimonial.id
+      resourceId: testimonial._id ?? testimonial.id,
+      actionUrl: '/admin?view=testimonials'
     })));
     const failedNotifications = notificationResults.filter((result) => result.status === 'rejected');
     if (failedNotifications.length) {
@@ -89,13 +91,14 @@ export class TestimonialService {
     }
     try {
       await this.notificationService.notify(testimonial.parentUserId, {
-        type: 'testimonial_decision',
+        type: NOTIFICATION_TYPES.TESTIMONIAL_DECISION,
         title: status === 'approved' ? 'تم اعتماد رأيك' : 'تمت مراجعة رأيك',
         message: status === 'approved'
           ? 'شكرًا لمشاركتك. أصبح رأيك ظاهرًا في الصفحة الرئيسية.'
           : 'شكرًا لمشاركة رأيك. لن يظهر في الصفحة الرئيسية.',
         resourceType: 'testimonial',
-        resourceId: testimonial._id ?? testimonial.id
+        resourceId: testimonial._id ?? testimonial.id,
+        actionUrl: '/dashboard?section=testimonials'
       });
     } catch (error) {
       this.logger.error({ error, testimonialId: String(testimonialId), parentUserId: String(testimonial.parentUserId) }, 'Parent testimonial decision notification could not be saved.');
