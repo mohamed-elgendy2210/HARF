@@ -165,6 +165,10 @@ export class MediaAssetService {
     this.repository = repository;
     this.storageDirectory = path.resolve(storageDirectory);
     this.now = now;
+    this.publicAssetIdsCache = null;
+    this.publicAssetIdsCacheExpiresAt = 0;
+    this.publicAssetIdsCachePromise = null;
+    this.publicAssetIdsCacheGeneration = 0;
   }
 
   async initialize() {
@@ -271,10 +275,42 @@ export class MediaAssetService {
   async readPublicAsset(assetId) {
     const asset = await this.repository.findActivePublicAsset(assetId);
     if (!asset) return null;
-    const versions = await this.repository.listPublishedVersions();
-    const isReferenced = versions.some((version) => version.assetIds.includes(String(assetId)));
-    if (!isReferenced) return null;
+    const publicAssetIds = await this.getPublicAssetIds();
+    if (!publicAssetIds.has(String(assetId))) return null;
     return this.readAssetFile(asset);
+  }
+
+  invalidatePublicAssetIdsCache() {
+    this.publicAssetIdsCacheGeneration += 1;
+    this.publicAssetIdsCache = null;
+    this.publicAssetIdsCacheExpiresAt = 0;
+    this.publicAssetIdsCachePromise = null;
+  }
+
+  async getPublicAssetIds() {
+    if (this.publicAssetIdsCache && Date.now() < this.publicAssetIdsCacheExpiresAt) {
+      return this.publicAssetIdsCache;
+    }
+    if (this.publicAssetIdsCachePromise) return this.publicAssetIdsCachePromise;
+
+    const generation = this.publicAssetIdsCacheGeneration;
+    const promise = this.repository.listPublishedVersions()
+      .then((versions) => {
+        if (generation !== this.publicAssetIdsCacheGeneration) {
+          return this.getPublicAssetIds();
+        }
+        const assetIds = new Set(versions.flatMap(({ assetIds }) => assetIds));
+        this.publicAssetIdsCache = assetIds;
+        this.publicAssetIdsCacheExpiresAt = Date.now() + 30_000;
+        return assetIds;
+      })
+      .finally(() => {
+        if (this.publicAssetIdsCachePromise === promise) {
+          this.publicAssetIdsCachePromise = null;
+        }
+      });
+    this.publicAssetIdsCachePromise = promise;
+    return promise;
   }
 
   async readAdminAsset(assetId) {

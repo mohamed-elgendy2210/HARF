@@ -228,6 +228,7 @@ export class GameLibraryService {
       status: 'published',
       publishedVersion: version
     });
+    this.mediaAssetService.invalidatePublicAssetIdsCache();
     await this.audit(actor, 'admin.game_published', { gameId, version });
     return updated;
   }
@@ -239,6 +240,7 @@ export class GameLibraryService {
       throw new AppError(409, 'TRIAL_GAME_MUST_REMAIN_PUBLISHED', 'Choose another published trial game before unpublishing this game.');
     }
     const updated = await this.repository.updateDefinition(gameId, { status: 'unpublished' });
+    this.mediaAssetService.invalidatePublicAssetIdsCache();
     await this.audit(actor, 'admin.game_unpublished', { gameId });
     return updated;
   }
@@ -306,6 +308,7 @@ export class GameLibraryService {
 
   async setAssetActive(actor, assetId, active) {
     const asset = await this.mediaAssetService.setActive(assetId, active);
+    this.mediaAssetService.invalidatePublicAssetIdsCache();
     await this.audit(actor, 'admin.media_asset_status_changed', { assetId, active });
     return asset;
   }

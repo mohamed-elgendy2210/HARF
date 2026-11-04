@@ -3667,6 +3667,7 @@ test('administrator game library verifies uploads and publishes immutable game v
   assert.equal(publicAsset.status, 200);
   assert.equal(publicAsset.headers.get('content-type'), 'image/png');
   assert.equal(publicAsset.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(publicAsset.headers.get('cache-control'), 'public, max-age=3600');
   assert.deepEqual(Buffer.from(await publicAsset.arrayBuffer()), png);
   const publicMascotVideo = await request(`/media/${mascotVideoAsset.id}`);
   assert.equal(publicMascotVideo.status, 200);
@@ -3678,6 +3679,7 @@ test('administrator game library verifies uploads and publishes immutable game v
   });
   assert.equal(lottiePreview.status, 200);
   assert.equal(lottiePreview.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(lottiePreview.headers.get('cache-control'), 'private, no-store');
   assert.match(await lottiePreview.text(), /"layers":\[\]/);
   const assetListResponse = await request('/admin/assets', { cookie: adminCookie, csrfToken });
   const listedAsset = (await assetListResponse.json()).assets.find(({ id }) => id === asset.id);

@@ -2,13 +2,13 @@ import { Router } from 'express';
 import { validate } from '../middleware/validate.js';
 import { assetIdSchema } from '../validation/gameLibrary.js';
 
-function sendAsset(request, response, result) {
+function sendAsset(request, response, result, { cacheControl = 'private, no-store' } = {}) {
   const { buffer } = result;
   const range = request.headers.range;
   response
     .set('X-Content-Type-Options', 'nosniff')
     .set('Content-Security-Policy', "default-src 'none'; sandbox")
-    .set('Cache-Control', 'private, no-store')
+    .set('Cache-Control', cacheControl)
     .set('Accept-Ranges', 'bytes')
     .type(result.asset.mimeType);
   if (!range) {
@@ -44,7 +44,7 @@ export function createMediaRouter({ gameLibraryService }) {
         response.status(404).json({ error: { code: 'ASSET_NOT_FOUND', message: 'The media asset was not found.' } });
         return;
       }
-      sendAsset(request, response, result);
+      sendAsset(request, response, result, { cacheControl: 'public, max-age=3600' });
     } catch (error) {
       next(error);
     }

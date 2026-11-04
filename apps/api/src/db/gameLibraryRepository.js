@@ -125,7 +125,9 @@ export function createGameLibraryRepository() {
         .lean();
       const gameIds = definitions.map(({ gameId }) => gameId);
       if (gameIds.length === 0) return [];
-      return GameVersion.find({ gameId: { $in: gameIds } }).lean();
+      return GameVersion.find({ gameId: { $in: gameIds } })
+        .select('assetIds')
+        .lean();
     },
     getSetting(key) {
       return GameSetting.findOne({ key }).lean();
