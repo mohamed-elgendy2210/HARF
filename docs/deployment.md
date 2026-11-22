@@ -4,6 +4,22 @@
 
 No hosting provider, domain, TLS terminator, or production topology has been selected. The application is prepared to use configurable settings but is not a production deployment. Before launch, confirm the actual network path from client to proxy to API and review proxy trust, CORS, cookies, MongoDB connectivity, backups, monitoring, and TLS settings.
 
+## Vercel deployment
+
+The repository root includes `vercel.json` with separate `api` and `web` services and routes `/api/*` to the Express service while all other paths are routed to the Vite application. Import the repository as a Vercel project with the repository root selected as the project root.
+
+Configure these variables as Vercel environment secrets, not in source control:
+
+- `NODE_ENV=production`
+- `MONGODB_URI` with the complete Atlas connection string ending in `/harf`
+- `APP_ORIGIN=https://<your-vercel-domain>`
+- `CLIENT_ORIGINS=https://<your-vercel-domain>`
+- `VITE_API_BASE_URL=` for same-origin API routing
+- `TRUST_PROXY=<actual-trusted-proxy-address-or-hop-count>`
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_FROM`, and optional paired `SMTP_USER`/`SMTP_PASSWORD`
+
+The production configuration rejects HTTP browser origins and requires HTTPS. Add the actual custom domain or Vercel domain to `APP_ORIGIN` and `CLIENT_ORIGINS` before deployment. Never add `MONGODB_URI`, SMTP passwords, or API credentials to `vercel.json` or commit them.
+
 ## Local development
 
 1. Install Node.js 22.12 or newer and npm 10 or newer.

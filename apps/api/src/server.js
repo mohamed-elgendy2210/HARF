@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from './config/env.js';
 import { createApp } from './app.js';
 import { connectMongo, disconnectMongo, getDatabaseState } from './db/mongo.js';
@@ -40,7 +41,7 @@ import { RoleService } from './services/roleService.js';
 
 const logger = createLogger({ level: config.logLevel, isProduction: config.isProduction });
 
-async function start() {
+export async function createServerApp() {
   const databaseConnected = await connectMongo(config.mongodbUri, { isProduction: config.isProduction, logger });
   if (databaseConnected) {
     await Promise.all([
@@ -200,6 +201,11 @@ async function start() {
     sessionPaymentService: databaseConnected ? sessionPaymentService : null,
     roleService
   });
+  return { app, appointmentService };
+}
+
+async function start() {
+  const { app, appointmentService } = await createServerApp();
   const server = app.listen(config.port, config.host, () => {
     logger.info({ host: config.host, port: config.port }, 'Harf API listening.');
   });
@@ -225,7 +231,11 @@ async function start() {
   process.once('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
-void start().catch((error) => {
-  logger.fatal({ error: safeError(error) }, 'Harf API failed to start.');
-  process.exitCode = 1;
-});
+const isMainModule = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  void start().catch((error) => {
+    logger.fatal({ error: safeError(error) }, 'Harf API failed to start.');
+    process.exitCode = 1;
+  });
+}
