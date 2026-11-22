@@ -41,7 +41,7 @@ import { RoleService } from './services/roleService.js';
 
 const logger = createLogger({ level: config.logLevel, isProduction: config.isProduction });
 
-export async function createServerApp() {
+export async function createServerApp({ startExpiryWorker = true } = {}) {
   const databaseConnected = await connectMongo(config.mongodbUri, { isProduction: config.isProduction, logger });
   if (databaseConnected) {
     await Promise.all([
@@ -113,7 +113,7 @@ export async function createServerApp() {
     authRepository: repository,
     lifetimeMinutes: config.videoTestLifetimeMinutes
   });
-  if (databaseConnected) appointmentService.startExpiryWorker();
+  if (databaseConnected && startExpiryWorker) appointmentService.startExpiryWorker();
   const gameLibraryRepository = createGameLibraryRepository();
   const mediaAssetService = new MediaAssetService({
     repository: gameLibraryRepository,
