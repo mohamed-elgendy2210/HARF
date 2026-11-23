@@ -17,7 +17,11 @@ test('MongoDB connects to the existing harf database', async (t) => {
   }), true);
   assert.deepEqual(connect.mock.calls[0].arguments[1], {
     dbName: 'harf',
-    serverSelectionTimeoutMS: 5000
+    serverSelectionTimeoutMS: 5000,
+    maxPoolSize: 5,
+    minPoolSize: 0,
+    maxIdleTimeMS: 30000,
+    maxConnecting: 2
   });
   assert.deepEqual(logger.info.mock.calls[0].arguments, ['MongoDB connection established.']);
 });
@@ -61,4 +65,35 @@ test('MongoDB reconnects after an established connection is lost', async (t) => 
     logger
   }), true);
   assert.equal(connect.mock.calls.length, 1);
+});
+
+test('concurrent MongoDB reconnects share one connection attempt', async (t) => {
+  const logger = {
+    info: mock.fn(),
+    warn: mock.fn(),
+    error: mock.fn()
+  };
+  const previousReadyState = mongoose.connection.readyState;
+  t.after(() => { mongoose.connection.readyState = previousReadyState; });
+  mongoose.connection.readyState = 0;
+  let releaseConnection;
+  const connectionGate = new Promise((resolve) => { releaseConnection = resolve; });
+  const connect = t.mock.method(mongoose, 'connect', async () => {
+    await connectionGate;
+    mongoose.connection.readyState = 1;
+    return mongoose;
+  });
+
+  const first = ensureMongoConnected('mongodb+srv://cluster.example.invalid/harf', {
+    isProduction: true,
+    logger
+  });
+  const second = ensureMongoConnected('mongodb+srv://cluster.example.invalid/harf', {
+    isProduction: true,
+    logger
+  });
+
+  assert.equal(connect.mock.calls.length, 1);
+  releaseConnection();
+  assert.deepEqual(await Promise.all([first, second]), [true, true]);
 });

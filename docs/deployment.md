@@ -19,6 +19,8 @@ Configure these variables as Vercel environment secrets, not in source control:
 
 On Vercel, the API trusts the single Vercel HTTPS proxy hop. Uploaded game media, specialist verification documents, and payment receipts use a private Vercel Blob store. Connect the store to the project in **Production** and **Preview**, and enable the read-write token environment variable so `BLOB_READ_WRITE_TOKEN` is available to the API. Local development continues to use the configured filesystem directory. The production configuration rejects HTTP browser origins and requires HTTPS. Add the actual custom domain or Vercel domain to `APP_ORIGIN` and `CLIENT_ORIGINS` before deployment. Never add `MONGODB_URI`, SMTP passwords, or API credentials to `vercel.json` or commit them.
 
+The API reuses one Mongoose client per warm function instance and caps each connection pool at five sockets, with idle sockets closed after 30 seconds. Keep this reuse in place for serverless deployments; creating a new client per request or using the driver's default 100-socket pool can exhaust Atlas connection limits. After changing pool settings, deploy once so old function instances and their pools can drain. If the limit is still reached, inspect Vercel function concurrency and Atlas connection metrics before changing network access or upgrading.
+
 ## Local development
 
 1. Install Node.js 22.12 or newer and npm 10 or newer.
