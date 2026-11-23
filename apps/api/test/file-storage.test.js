@@ -3,7 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
+import { BlobNotFoundError } from '@vercel/blob';
 import { FileStorage } from '../src/services/fileStorage.js';
+import { PlatformSettingsService } from '../src/services/platformSettingsService.js';
 
 test('local file storage writes, reads, and removes files', async (t) => {
   const storageDirectory = await mkdtemp(path.join(os.tmpdir(), 'harf-storage-'));
@@ -84,4 +86,57 @@ test('private Blob storage reports missing credentials explicitly', async (t) =>
     storage.write('asset-id', Buffer.from('file'), 'image/png'),
     (error) => error.code === 'BLOB_STORAGE_NOT_CONFIGURED' && error.statusCode === 503
   );
+});
+
+test('private Blob storage treats missing legacy objects as unavailable assets', async (t) => {
+  const previousToken = process.env.BLOB_READ_WRITE_TOKEN;
+  process.env.BLOB_READ_WRITE_TOKEN = 'test-token';
+  t.after(() => {
+    if (previousToken === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
+    else process.env.BLOB_READ_WRITE_TOKEN = previousToken;
+  });
+  const storage = new FileStorage({
+    storageDirectory: os.tmpdir(),
+    blobPrefix: 'private-assets',
+    useBlob: true,
+    blobClient: {
+      head: async () => { throw new BlobNotFoundError(); }
+    }
+  });
+
+  assert.equal(await storage.exists('legacy-asset-id'), false);
+});
+
+test('public platform settings skip legacy hero images missing from Blob', async (t) => {
+  const previousToken = process.env.BLOB_READ_WRITE_TOKEN;
+  process.env.BLOB_READ_WRITE_TOKEN = 'test-token';
+  t.after(() => {
+    if (previousToken === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
+    else process.env.BLOB_READ_WRITE_TOKEN = previousToken;
+  });
+  const storage = new FileStorage({
+    storageDirectory: os.tmpdir(),
+    blobPrefix: 'private-assets',
+    useBlob: true,
+    blobClient: {
+      head: async () => { throw new BlobNotFoundError(); }
+    }
+  });
+  const platformSettingsService = new PlatformSettingsService({
+    repository: {
+      getSettings: async () => ({
+        heroImageAssetIds: ['asset-id'],
+        homepage: {}
+      }),
+      findActiveImageAsset: async () => ({
+        id: 'asset-id',
+        storageName: 'legacy-file-id',
+        displayName: 'Legacy image'
+      })
+    },
+    mediaAssetService: { isAvailable: (asset) => storage.exists(asset.storageName) }
+  });
+
+  const settings = await platformSettingsService.getPublicSettings();
+  assert.deepEqual(settings.heroImages, []);
 });

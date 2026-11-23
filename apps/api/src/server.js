@@ -2,7 +2,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config } from './config/env.js';
 import { createApp } from './app.js';
-import { connectMongo, disconnectMongo, getDatabaseState } from './db/mongo.js';
+import { connectMongo, disconnectMongo, ensureMongoConnected, getDatabaseState } from './db/mongo.js';
 import { createAuthRepository, ensureAuthIndexes } from './db/authRepository.js';
 import { createChildRepository, ensureChildIndexes } from './db/childRepository.js';
 import { createLogger, safeError } from './lib/logger.js';
@@ -186,6 +186,10 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
     config,
     logger,
     getDatabaseState,
+    ensureDatabaseConnected: () => ensureMongoConnected(config.mongodbUri, {
+      isProduction: config.isProduction,
+      logger
+    }),
     authService,
     repository,
     notificationService,

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import mongoose from 'mongoose';
 import { mock, test } from 'node:test';
-import { connectMongo } from '../src/db/mongo.js';
+import { connectMongo, ensureMongoConnected } from '../src/db/mongo.js';
 
 test('MongoDB connects to the existing harf database', async (t) => {
   const logger = {
@@ -40,4 +40,25 @@ test('MongoDB connection failures are actionable without exposing the URI', asyn
   });
   assert.equal(connect.mock.calls.length, 1);
   assert.equal(JSON.stringify(logger.error.mock.calls).includes('mongodb+srv://cluster.example.invalid'), false);
+});
+
+test('MongoDB reconnects after an established connection is lost', async (t) => {
+  const logger = {
+    info: mock.fn(),
+    warn: mock.fn(),
+    error: mock.fn()
+  };
+  const previousReadyState = mongoose.connection.readyState;
+  t.after(() => { mongoose.connection.readyState = previousReadyState; });
+  mongoose.connection.readyState = 0;
+  const connect = t.mock.method(mongoose, 'connect', async () => {
+    mongoose.connection.readyState = 1;
+    return mongoose;
+  });
+
+  assert.equal(await ensureMongoConnected('mongodb+srv://cluster.example.invalid/harf', {
+    isProduction: true,
+    logger
+  }), true);
+  assert.equal(connect.mock.calls.length, 1);
 });

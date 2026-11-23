@@ -3,6 +3,7 @@ import { safeError } from '../lib/logger.js';
 
 let connectionEventsRegistered = false;
 let disconnecting = false;
+let reconnectionPromise = null;
 
 function registerConnectionEvents(logger) {
   if (connectionEventsRegistered) return;
@@ -43,6 +44,34 @@ export async function connectMongo(uri, { isProduction, logger }) {
 
 export function getDatabaseState() {
   return mongoose.connection.readyState;
+}
+
+export async function ensureMongoConnected(uri, options) {
+  if (getDatabaseState() === 1) return true;
+  if (!uri) return false;
+  if (reconnectionPromise) return reconnectionPromise;
+
+  reconnectionPromise = (async () => {
+    if (getDatabaseState() === 2) {
+      try {
+        await mongoose.connection.asPromise();
+      } catch (error) {
+        options.logger.warn(
+          { error: safeError(error) },
+          'MongoDB connection attempt ended before readiness; retrying.'
+        );
+        if (getDatabaseState() !== 0) throw new Error('MongoDB is still reconnecting.');
+      }
+      if (getDatabaseState() === 1) return true;
+    }
+    return connectMongo(uri, options);
+  })();
+
+  try {
+    return await reconnectionPromise;
+  } finally {
+    reconnectionPromise = null;
+  }
 }
 
 export async function disconnectMongo() {

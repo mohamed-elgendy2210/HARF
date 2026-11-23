@@ -1,4 +1,4 @@
-import { del, get, head, put } from '@vercel/blob';
+import { BlobNotFoundError, del, get, head, put } from '@vercel/blob';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AppError } from '../middleware/errors.js';
@@ -70,7 +70,7 @@ export class FileStorage {
         await this.blobClient.head(`${this.blobPrefix}/${name}`);
         return true;
       } catch (error) {
-        if (error?.name === 'BlobNotFoundError') return false;
+        if (error instanceof BlobNotFoundError) return false;
         throw error;
       }
     }

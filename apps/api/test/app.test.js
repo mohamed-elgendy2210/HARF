@@ -41,6 +41,39 @@ test('readiness reports unavailable database without a success-shaped fallback',
   assert.deepEqual(await response.json(), { status: 'not-ready', database: 'disconnected' });
 });
 
+test('database-backed requests reconnect before returning temporary unavailability', async (t) => {
+  let databaseState = 0;
+  let reconnectionAttempts = 0;
+  const reconnectingApp = createApp({
+    config,
+    logger,
+    getDatabaseState: () => databaseState,
+    ensureDatabaseConnected: async () => {
+      reconnectionAttempts += 1;
+      databaseState = 1;
+      return true;
+    },
+    authService: { authenticate: async () => null },
+    repository: {},
+    platformSettingsService: {
+      getPublicSettings: async () => ({ homepage: { title: 'Harf' } })
+    }
+  });
+  const reconnectingServer = createServer(reconnectingApp);
+  reconnectingServer.listen(0, '127.0.0.1');
+  await once(reconnectingServer, 'listening');
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${reconnectingServer.address().port}/api/v1/platform/settings`);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { settings: { homepage: { title: 'Harf' } } });
+    assert.equal(reconnectionAttempts, 1);
+  } finally {
+    reconnectingServer.close();
+    await once(reconnectingServer, 'close');
+  }
+});
+
 test('unknown API paths return a safe JSON error', async () => {
   const response = await fetch(`${baseUrl}/api/v1/missing`);
   assert.equal(response.status, 404);

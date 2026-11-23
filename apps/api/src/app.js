@@ -3,6 +3,7 @@ import express from 'express';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import { AppError, errorHandler, notFoundHandler } from './middleware/errors.js';
+import { safeError } from './lib/logger.js';
 import { requireConfiguredHttps, requireTrustedOrigin } from './middleware/auth.js';
 import { createAuthenticationMiddleware } from './middleware/auth.js';
 import { getSessionCookieName } from './config/cookies.js';
@@ -22,13 +23,24 @@ import { createSessionPaymentsRouter } from './routes/sessionPayments.js';
 
 const API_PREFIX = '/api/v1';
 
-function requireDatabase(getDatabaseState) {
-  return (_request, _response, next) => {
-    if (getDatabaseState() !== 1) {
-      next(new AppError(503, 'DATABASE_UNAVAILABLE', 'The service is temporarily unavailable.'));
+async function databaseIsReady(request, getDatabaseState, ensureDatabaseConnected) {
+  if (getDatabaseState() === 1) return true;
+  if (!ensureDatabaseConnected) return false;
+  try {
+    return await ensureDatabaseConnected() && getDatabaseState() === 1;
+  } catch (error) {
+    request.log.error({ error: safeError(error) }, 'MongoDB reconnection failed.');
+    return false;
+  }
+}
+
+function requireDatabase(getDatabaseState, ensureDatabaseConnected) {
+  return async (request, _response, next) => {
+    if (await databaseIsReady(request, getDatabaseState, ensureDatabaseConnected)) {
+      next();
       return;
     }
-    next();
+    next(new AppError(503, 'DATABASE_UNAVAILABLE', 'The service is temporarily unavailable.'));
   };
 }
 
@@ -36,6 +48,7 @@ export function createApp({
   config,
   logger,
   getDatabaseState,
+  ensureDatabaseConnected,
   authService,
   repository,
   childService,
@@ -90,8 +103,8 @@ export function createApp({
     response.json({ status: 'ok', service: 'harf-api' });
   });
 
-  app.get(`${API_PREFIX}/health/ready`, (_request, response) => {
-    const databaseReady = getDatabaseState() === 1;
+  app.get(`${API_PREFIX}/health/ready`, async (request, response) => {
+    const databaseReady = await databaseIsReady(request, getDatabaseState, ensureDatabaseConnected);
     response.status(databaseReady ? 200 : 503).json({
       status: databaseReady ? 'ready' : 'not-ready',
       database: databaseReady ? 'connected' : 'disconnected'
@@ -102,7 +115,7 @@ export function createApp({
   app.use(`${API_PREFIX}/`, requireTrustedOrigin(config.clientOrigins));
   app.use(express.json({ limit: '32kb', strict: true }));
   if (gameService && authService) {
-    const databaseMiddleware = requireDatabase(getDatabaseState);
+    const databaseMiddleware = requireDatabase(getDatabaseState, ensureDatabaseConnected);
     const authenticationMiddleware = createAuthenticationMiddleware(
       authService,
       (request) => readCookie(request, getSessionCookieName(config.isProduction))
@@ -119,13 +132,13 @@ export function createApp({
     }
   }
   if (authService && repository) {
-    const databaseMiddleware = requireDatabase(getDatabaseState);
+    const databaseMiddleware = requireDatabase(getDatabaseState, ensureDatabaseConnected);
     const authenticationMiddleware = createAuthenticationMiddleware(
       authService,
       (request) => readCookie(request, getSessionCookieName(config.isProduction))
     );
     if (notificationService) {
-      app.use(`${API_PREFIX}/notifications`, requireDatabase(getDatabaseState), createNotificationsRouter({
+      app.use(`${API_PREFIX}/notifications`, requireDatabase(getDatabaseState, ensureDatabaseConnected), createNotificationsRouter({
         authenticationMiddleware,
         notificationService
       }));
