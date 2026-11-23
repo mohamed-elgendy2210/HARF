@@ -648,7 +648,26 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
       setAssets((current) => current.filter((item) => item.id !== asset.id));
       setNotice('تم حذف الأصل غير المرتبط بأي مسودة أو نسخة منشورة.');
     } catch (requestError) {
-      setError(requestError.message);
+      if (requestError.code === 'ASSET_IN_USE') {
+        const usages = asset.usage ?? [];
+        const visibleUsages = usages.slice(0, 3).map(({ title, source, version, location }) => (
+          `${title} · ${source}${version ? ` v${version}` : ''} · ${location}`
+        ));
+        const remainingUsages = usages.length > visibleUsages.length
+          ? `، و${usages.length - visibleUsages.length} مواضع أخرى`
+          : '';
+        const usageDetails = visibleUsages.length
+          ? ` الاستخدامات: ${visibleUsages.join('؛ ')}${remainingUsages}.`
+          : ' افتح تفاصيل الأصل لمعرفة مواضع الاستخدام.';
+        const guidance = usages.some(({ source }) => source === 'نسخة منشورة')
+          ? 'لا يمكن حذف مراجع النسخ المنشورة حفاظًا على محتواها ونتائجها؛ استبدل الملف لإنشاء أصل جديد.'
+          : usages.some(({ source }) => source === 'إعدادات المنصة')
+            ? 'غيّر الشعار أو صور المقدمة في إعدادات المنصة أولًا.'
+            : 'أزل تعيينه من المسودة أولًا.';
+        setError(`لا يمكن حذف «${asset.displayName}» لأنه ما زال مستخدمًا.${usageDetails} ${guidance}`);
+      } else {
+        setError(requestError.message);
+      }
     } finally {
       setBusy(false);
     }
