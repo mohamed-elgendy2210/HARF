@@ -1,11 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import { setServers } from 'node:dns';
 import { isIP } from 'node:net';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
 const projectRoot = fileURLToPath(new URL('../../../../', import.meta.url));
+const isVercel = process.env.VERCEL === '1';
 dotenv.config({ path: path.join(projectRoot, '.env') });
 
 const envSchema = z.object({
@@ -83,7 +85,10 @@ const jitsiDomain = values.JITSI_DOMAIN.toLowerCase();
 if (!/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/.test(jitsiDomain)) {
   throw new Error('JITSI_DOMAIN must be a hostname without a scheme, port, or path.');
 }
-const mediaStorageDir = path.resolve(values.MEDIA_STORAGE_DIR || path.join(projectRoot, '..', 'harf-media'));
+const mediaStorageDir = path.resolve(
+  values.MEDIA_STORAGE_DIR
+    || (isVercel ? path.join(tmpdir(), 'harf-media') : path.join(projectRoot, '..', 'harf-media'))
+);
 const mediaRelativePath = path.relative(projectRoot, mediaStorageDir);
 if (mediaRelativePath === '' || (
   mediaRelativePath !== '..'
@@ -128,10 +133,11 @@ export const config = Object.freeze({
   host: values.HOST,
   port: values.PORT,
   mongodbUri: values.MONGODB_URI,
+  isVercel,
   appOrigin,
   clientOrigins,
   mediaStorageDir,
-  trustProxy: parseTrustProxy(values.TRUST_PROXY),
+  trustProxy: isVercel ? 1 : parseTrustProxy(values.TRUST_PROXY),
   logLevel: values.LOG_LEVEL,
   jitsi: Object.freeze({
     domain: jitsiDomain,

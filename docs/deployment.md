@@ -6,7 +6,7 @@ No hosting provider, domain, TLS terminator, or production topology has been sel
 
 ## Vercel deployment
 
-The repository root includes `vercel.json` with separate `api` and `web` services and routes `/api/*` to the Express service while all other paths are routed to the Vite application. Import the repository as a Vercel project with the repository root selected as the project root.
+The repository root includes `vercel.json` for the Vite frontend and a Node.js function at `api/index.js` that serves the Express API. Import the repository as a Vercel project with the repository root selected as the project root.
 
 Configure these variables as Vercel environment secrets, not in source control:
 
@@ -15,10 +15,9 @@ Configure these variables as Vercel environment secrets, not in source control:
 - `APP_ORIGIN=https://<your-vercel-domain>`
 - `CLIENT_ORIGINS=https://<your-vercel-domain>`
 - `VITE_API_BASE_URL=` for same-origin API routing
-- `TRUST_PROXY=<actual-trusted-proxy-address-or-hop-count>`
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_FROM`, and optional paired `SMTP_USER`/`SMTP_PASSWORD`
 
-The production configuration rejects HTTP browser origins and requires HTTPS. Add the actual custom domain or Vercel domain to `APP_ORIGIN` and `CLIENT_ORIGINS` before deployment. Never add `MONGODB_URI`, SMTP passwords, or API credentials to `vercel.json` or commit them.
+On Vercel, the API trusts the single Vercel HTTPS proxy hop and uses `/tmp/harf-media` for temporary uploads so initialization does not attempt to write into the read-only deployment bundle. `/tmp` is ephemeral: configure a durable object-storage integration before relying on uploaded logos, media, specialist documents, or payment receipts. The production configuration rejects HTTP browser origins and requires HTTPS. Add the actual custom domain or Vercel domain to `APP_ORIGIN` and `CLIENT_ORIGINS` before deployment. Never add `MONGODB_URI`, SMTP passwords, or API credentials to `vercel.json` or commit them.
 
 ## Local development
 

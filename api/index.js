@@ -1,10 +1,14 @@
-import { createServerApp } from '../apps/api/src/server.js';
-
 let appPromise;
 
 async function getApp() {
   if (!appPromise) {
-    appPromise = createServerApp({ startExpiryWorker: false }).then(({ app }) => app);
+    appPromise = import('../apps/api/src/server.js')
+      .then(({ createServerApp }) => createServerApp({ startExpiryWorker: false }))
+      .then(({ app }) => app)
+      .catch((error) => {
+        appPromise = undefined;
+        throw error;
+      });
   }
   return appPromise;
 }
