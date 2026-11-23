@@ -1,4 +1,5 @@
 import { BlobNotFoundError, del, get, head, put } from '@vercel/blob';
+import { generateClientTokenFromReadWriteToken } from '@vercel/blob/client';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { AppError } from '../middleware/errors.js';
@@ -15,12 +16,14 @@ export class FileStorage {
     storageDirectory,
     blobPrefix,
     useBlob = process.env.VERCEL === '1',
-    blobClient = { del, get, head, put }
+    blobClient = { del, get, head, put },
+    clientUploadTokenGenerator = generateClientTokenFromReadWriteToken
   }) {
     this.storageDirectory = path.resolve(storageDirectory);
     this.blobPrefix = blobPrefix;
     this.useBlob = useBlob;
     this.blobClient = blobClient;
+    this.clientUploadTokenGenerator = clientUploadTokenGenerator;
   }
 
   async initialize() {
@@ -43,16 +46,35 @@ export class FileStorage {
     await writeFile(path.join(this.storageDirectory, name), buffer, { flag: 'wx', mode: 0o600 });
   }
 
+  async createClientUploadToken(name, { allowedContentTypes, maximumSizeInBytes }) {
+    assertStorageName(name);
+    if (!this.useBlob) return null;
+    this.assertBlobConnected();
+    return this.clientUploadTokenGenerator({
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+      pathname: `${this.blobPrefix}/${name}`,
+      allowedContentTypes,
+      maximumSizeInBytes,
+      validUntil: Date.now() + 15 * 60 * 1000,
+      addRandomSuffix: false
+    });
+  }
+
   async read(name) {
     assertStorageName(name);
     if (this.useBlob) {
       this.assertBlobConnected();
-      const result = await this.blobClient.get(`${this.blobPrefix}/${name}`, {
-        access: 'private',
-        useCache: false
-      });
-      if (!result || result.statusCode !== 200 || !result.stream) return null;
-      return Buffer.from(await new Response(result.stream).arrayBuffer());
+      try {
+        const result = await this.blobClient.get(`${this.blobPrefix}/${name}`, {
+          access: 'private',
+          useCache: false
+        });
+        if (!result || result.statusCode !== 200 || !result.stream) return null;
+        return Buffer.from(await new Response(result.stream).arrayBuffer());
+      } catch (error) {
+        if (error instanceof BlobNotFoundError) return null;
+        throw error;
+      }
     }
     try {
       return await readFile(path.join(this.storageDirectory, name));

@@ -10,6 +10,13 @@ const MAX_SIZES = Object.freeze({
   animation: 3 * 1024 * 1024,
   video: 20 * 1024 * 1024
 });
+const ALLOWED_CONTENT_TYPES = Object.freeze({
+  image: ['image/png', 'image/jpeg', 'image/webp'],
+  audio: ['audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/ogg'],
+  animation: ['image/gif', 'application/json'],
+  video: ['video/mp4']
+});
+const STORAGE_NAME_PATTERN = /^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i;
 const ALLOWED_SIGNATURES = Object.freeze({
   'image/png': 'image',
   'image/jpeg': 'image',
@@ -183,6 +190,31 @@ export class MediaAssetService {
     })));
   }
 
+  async createUploadIntent({ kind, assetId } = {}) {
+    let expectedKind = kind;
+    if (assetId) {
+      const asset = await this.repository.findAsset(assetId);
+      if (!asset) throw new AppError(404, 'ASSET_NOT_FOUND', 'The media asset was not found.');
+      expectedKind = asset.kind;
+    }
+    if (!Object.hasOwn(MAX_SIZES, expectedKind)) {
+      throw new AppError(400, 'INVALID_MEDIA_KIND', 'Choose a supported media type.');
+    }
+    if (!this.storage.useBlob) return null;
+
+    const storageName = randomUUID();
+    const token = await this.storage.createClientUploadToken(storageName, {
+      allowedContentTypes: ALLOWED_CONTENT_TYPES[expectedKind],
+      maximumSizeInBytes: MAX_SIZES[expectedKind]
+    });
+    return {
+      storageName,
+      pathname: `${this.storage.blobPrefix}/${storageName}`,
+      token,
+      kind: expectedKind
+    };
+  }
+
   async upload({ file, displayName, kind, createdBy, altText = '', category = '', tags = [] }) {
     if (!file?.buffer) throw new AppError(400, 'FILE_REQUIRED', 'Choose a media file to upload.');
     const verified = await verifyFile(file.buffer, kind);
@@ -207,6 +239,42 @@ export class MediaAssetService {
       return serializeAsset(asset);
     } catch (error) {
       await this.storage.remove(storageName);
+      throw error;
+    }
+  }
+
+  async uploadFromStorage({ storageName, displayName, kind, createdBy, altText = '', category = '', tags = [] }) {
+    if (!STORAGE_NAME_PATTERN.test(storageName ?? '')) {
+      throw new AppError(400, 'INVALID_UPLOAD', 'The uploaded file reference is invalid.');
+    }
+    if (await this.repository.findAssetByStorageName(storageName)) {
+      throw new AppError(409, 'UPLOAD_ALREADY_COMPLETED', 'This upload has already been processed.');
+    }
+    const buffer = await this.storage.read(storageName);
+    if (!buffer) throw new AppError(404, 'UPLOAD_NOT_FOUND', 'The uploaded file could not be found.');
+
+    try {
+      const verified = await verifyFile(buffer, kind);
+      const asset = await this.repository.createAsset({
+        displayName,
+        altText,
+        category,
+        tags,
+        kind: verified.kind,
+        mimeType: verified.mimeType,
+        width: verified.width ?? null,
+        height: verified.height ?? null,
+        storageName,
+        sizeBytes: buffer.length,
+        active: true,
+        createdBy,
+        createdAt: this.now()
+      });
+      return serializeAsset(asset);
+    } catch (error) {
+      if (!(await this.repository.findAssetByStorageName(storageName))) {
+        await this.storage.remove(storageName);
+      }
       throw error;
     }
   }
@@ -245,6 +313,63 @@ export class MediaAssetService {
     } catch (error) {
       if (replacement) await this.repository.deleteAsset(String(replacement._id ?? replacement.id));
       await this.storage.remove(storageName);
+      throw error;
+    }
+    if (!(await this.repository.isAssetReferenced(String(assetId)))) {
+      await this.repository.deleteAsset(String(assetId));
+      await this.storage.remove(asset.storageName);
+    }
+    return serializeAsset(replacement);
+  }
+
+  async replaceFromStorage({ assetId, storageName, createdBy }) {
+    if (!STORAGE_NAME_PATTERN.test(storageName ?? '')) {
+      throw new AppError(400, 'INVALID_UPLOAD', 'The uploaded file reference is invalid.');
+    }
+    if (await this.repository.findAssetByStorageName(storageName)) {
+      throw new AppError(409, 'UPLOAD_ALREADY_COMPLETED', 'This upload has already been processed.');
+    }
+    const asset = await this.repository.findAsset(assetId);
+    if (!asset) {
+      if (await this.storage.exists(storageName)) await this.storage.remove(storageName);
+      throw new AppError(404, 'ASSET_NOT_FOUND', 'The media asset was not found.');
+    }
+    const buffer = await this.storage.read(storageName);
+    if (!buffer) throw new AppError(404, 'UPLOAD_NOT_FOUND', 'The uploaded file could not be found.');
+
+    let verified;
+    try {
+      verified = await verifyFile(buffer, asset.kind);
+    } catch (error) {
+      await this.storage.remove(storageName);
+      throw error;
+    }
+
+    let replacement;
+    try {
+      replacement = await this.repository.createAsset({
+        displayName: asset.displayName,
+        altText: asset.altText ?? '',
+        category: asset.category ?? '',
+        tags: asset.tags ?? [],
+        kind: verified.kind,
+        mimeType: verified.mimeType,
+        width: verified.width ?? null,
+        height: verified.height ?? null,
+        storageName,
+        sizeBytes: buffer.length,
+        active: true,
+        createdBy,
+        createdAt: this.now()
+      });
+      await this.repository.replaceDraftAssetReferences(String(assetId), String(replacement._id ?? replacement.id));
+    } catch (error) {
+      if (replacement) {
+        await this.repository.deleteAsset(String(replacement._id ?? replacement.id));
+        await this.storage.remove(storageName);
+      } else if (!(await this.repository.findAssetByStorageName(storageName))) {
+        await this.storage.remove(storageName);
+      }
       throw error;
     }
     if (!(await this.repository.isAssetReferenced(String(assetId)))) {

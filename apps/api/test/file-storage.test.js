@@ -70,6 +70,40 @@ test('private Blob storage uses the configured prefix and authenticated operatio
   assert.equal(deletedPath, 'private-assets/asset-id');
 });
 
+test('private Blob client upload tokens are constrained to the requested media path, types, and size', async (t) => {
+  const previousToken = process.env.BLOB_READ_WRITE_TOKEN;
+  process.env.BLOB_READ_WRITE_TOKEN = 'test-token';
+  t.after(() => {
+    if (previousToken === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
+    else process.env.BLOB_READ_WRITE_TOKEN = previousToken;
+  });
+
+  let tokenOptions;
+  const storage = new FileStorage({
+    storageDirectory: os.tmpdir(),
+    blobPrefix: 'media-assets',
+    useBlob: true,
+    clientUploadTokenGenerator: async (options) => {
+      tokenOptions = options;
+      return 'client-token';
+    }
+  });
+  const allowedContentTypes = ['audio/mpeg', 'audio/wav'];
+
+  const token = await storage.createClientUploadToken('upload-id', {
+    allowedContentTypes,
+    maximumSizeInBytes: 10 * 1024 * 1024
+  });
+
+  assert.equal(token, 'client-token');
+  assert.equal(tokenOptions.token, 'test-token');
+  assert.equal(tokenOptions.pathname, 'media-assets/upload-id');
+  assert.deepEqual(tokenOptions.allowedContentTypes, allowedContentTypes);
+  assert.equal(tokenOptions.maximumSizeInBytes, 10 * 1024 * 1024);
+  assert.equal(tokenOptions.addRandomSuffix, false);
+  assert.ok(tokenOptions.validUntil > Date.now());
+});
+
 test('private Blob storage reports missing credentials explicitly', async (t) => {
   const previousToken = process.env.BLOB_READ_WRITE_TOKEN;
   delete process.env.BLOB_READ_WRITE_TOKEN;
@@ -105,6 +139,25 @@ test('private Blob storage treats missing legacy objects as unavailable assets',
   });
 
   assert.equal(await storage.exists('legacy-asset-id'), false);
+});
+
+test('private Blob storage returns null when a requested object is missing', async (t) => {
+  const previousToken = process.env.BLOB_READ_WRITE_TOKEN;
+  process.env.BLOB_READ_WRITE_TOKEN = 'test-token';
+  t.after(() => {
+    if (previousToken === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
+    else process.env.BLOB_READ_WRITE_TOKEN = previousToken;
+  });
+  const storage = new FileStorage({
+    storageDirectory: os.tmpdir(),
+    blobPrefix: 'private-assets',
+    useBlob: true,
+    blobClient: {
+      get: async () => { throw new BlobNotFoundError(); }
+    }
+  });
+
+  assert.equal(await storage.read('missing-file'), null);
 });
 
 test('public platform settings skip legacy hero images missing from Blob', async (t) => {

@@ -306,6 +306,32 @@ export class GameLibraryService {
     return asset;
   }
 
+  async createAssetUploadIntent({ operation, metadata, assetId }) {
+    return this.mediaAssetService.createUploadIntent(
+      operation === 'upload' ? { kind: metadata.kind } : { assetId }
+    );
+  }
+
+  async completeAssetUpload(actor, { operation, storageName, assetId, metadata }) {
+    const asset = operation === 'upload'
+      ? await this.mediaAssetService.uploadFromStorage({
+        ...metadata,
+        storageName,
+        createdBy: actor._id ?? actor.id
+      })
+      : await this.mediaAssetService.replaceFromStorage({
+        assetId,
+        storageName,
+        createdBy: actor._id ?? actor.id
+      });
+    await this.audit(actor, operation === 'upload' ? 'admin.media_asset_uploaded' : 'admin.media_asset_replaced', {
+      assetId: asset.id,
+      kind: asset.kind,
+      sizeBytes: asset.sizeBytes
+    });
+    return asset;
+  }
+
   async setAssetActive(actor, assetId, active) {
     const asset = await this.mediaAssetService.setActive(assetId, active);
     this.mediaAssetService.invalidatePublicAssetIdsCache();

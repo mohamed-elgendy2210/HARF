@@ -165,6 +165,30 @@ export const uploadAssetMetadataSchema = z.object({
     .pipe(z.array(z.string().min(1).max(30)).max(10))
 }).strict();
 
+const uploadStorageName = z.string().regex(/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i);
+export const assetUploadIntentSchema = z.discriminatedUnion('operation', [
+  z.object({
+    operation: z.literal('upload'),
+    metadata: uploadAssetMetadataSchema
+  }).strict(),
+  z.object({
+    operation: z.literal('replace'),
+    assetId: mediaAssetId
+  }).strict()
+]);
+export const assetUploadCompleteSchema = z.discriminatedUnion('operation', [
+  z.object({
+    operation: z.literal('upload'),
+    storageName: uploadStorageName,
+    metadata: uploadAssetMetadataSchema
+  }).strict(),
+  z.object({
+    operation: z.literal('replace'),
+    storageName: uploadStorageName,
+    assetId: mediaAssetId
+  }).strict()
+]);
+
 export const updateAssetSchema = z.object({
   active: z.boolean().optional(),
   displayName: z.string().trim().min(1).max(100).optional(),

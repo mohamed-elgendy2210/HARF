@@ -43,6 +43,45 @@ const companionAnimals = [
   ['🦄', 'وحيد القرن']
 ];
 
+const uploadTypes = {
+  image: {
+    allowed: ['image/png', 'image/jpeg', 'image/webp'],
+    extensions: { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp' }
+  },
+  audio: {
+    allowed: ['audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/ogg'],
+    extensions: { mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg' }
+  },
+  animation: {
+    allowed: ['image/gif', 'application/json'],
+    extensions: { gif: 'image/gif', json: 'application/json' }
+  },
+  video: {
+    allowed: ['video/mp4'],
+    extensions: { mp4: 'video/mp4' }
+  }
+};
+
+function getUploadContentType(file, kind) {
+  const supported = uploadTypes[kind];
+  if (supported.allowed.includes(file.type)) return file.type;
+  const extension = file.name.split('.').pop()?.toLowerCase();
+  const contentType = supported.extensions[extension];
+  if (contentType) return contentType;
+  throw new Error('نوع الملف غير مدعوم لهذا النوع من الوسائط.');
+}
+
+async function uploadDirectlyToBlob(file, kind, intent) {
+  const { put } = await import('@vercel/blob/client');
+  const contentType = getUploadContentType(file, kind);
+  await put(intent.pathname, file, {
+    access: 'private',
+    token: intent.token,
+    contentType,
+    multipart: file.size > 5 * 1024 * 1024
+  });
+}
+
 const formatBytes = (bytes) => {
   if (bytes < 1024) return `${bytes} بايت`;
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} كيلوبايت`;
@@ -538,14 +577,48 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
     setError('');
     setNotice('');
     try {
-      const formData = new FormData();
-      formData.set('displayName', uploadName);
-      formData.set('kind', uploadKind);
-      formData.set('altText', uploadAltText);
-      formData.set('category', uploadCategory);
-      formData.set('tags', uploadTags);
-      formData.set('file', uploadFile);
-      const result = await apiRequest('/api/v1/admin/assets', { method: 'POST', body: formData });
+      const upload = await apiRequest('/api/v1/admin/assets/upload-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operation: 'upload',
+          metadata: {
+            displayName: uploadName,
+            kind: uploadKind,
+            altText: uploadAltText,
+            category: uploadCategory,
+            tags: uploadTags
+          }
+        })
+      });
+      let result;
+      if (upload.upload) {
+        await uploadDirectlyToBlob(uploadFile, uploadKind, upload.upload);
+        result = await apiRequest('/api/v1/admin/assets/upload-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            operation: 'upload',
+            storageName: upload.upload.storageName,
+            metadata: {
+              displayName: uploadName,
+              kind: uploadKind,
+              altText: uploadAltText,
+              category: uploadCategory,
+              tags: uploadTags
+            }
+          })
+        });
+      } else {
+        const formData = new FormData();
+        formData.set('displayName', uploadName);
+        formData.set('kind', uploadKind);
+        formData.set('altText', uploadAltText);
+        formData.set('category', uploadCategory);
+        formData.set('tags', uploadTags);
+        formData.set('file', uploadFile);
+        result = await apiRequest('/api/v1/admin/assets', { method: 'POST', body: formData });
+      }
       setAssets((current) => [result.asset, ...current]);
       setUploadName('');
       setUploadAltText('');
@@ -596,12 +669,30 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
     setError('');
     setNotice('');
     try {
-      const formData = new FormData();
-      formData.set('file', file);
-      await apiRequest(`/api/v1/admin/assets/${asset.id}/replace`, {
+      const upload = await apiRequest('/api/v1/admin/assets/upload-intent', {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operation: 'replace', assetId: asset.id })
       });
+      if (upload.upload) {
+        await uploadDirectlyToBlob(file, asset.kind, upload.upload);
+        await apiRequest('/api/v1/admin/assets/upload-complete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            operation: 'replace',
+            storageName: upload.upload.storageName,
+            assetId: asset.id
+          })
+        });
+      } else {
+        const formData = new FormData();
+        formData.set('file', file);
+        await apiRequest(`/api/v1/admin/assets/${asset.id}/replace`, {
+          method: 'POST',
+          body: formData
+        });
+      }
       const loaded = await loadData();
       if (loaded) {
         setNotice('تم استبدال الملف وإنشاء أصل جديد. تم تحديث المسودات إلى الأصل الجديد مع الاحتفاظ بمراجع النسخ المنشورة القديمة.');

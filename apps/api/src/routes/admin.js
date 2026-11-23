@@ -11,6 +11,8 @@ import {
   gameLibraryParamsSchema,
   trialGameSchema,
   trialGamesSchema,
+  assetUploadCompleteSchema,
+  assetUploadIntentSchema,
   updateAssetSchema,
   updateGameSchema,
   uploadAssetMetadataSchema
@@ -67,6 +69,15 @@ const mediaUpload = multer({
 const mediaUploadLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 30,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  handler(_request, _response, next) {
+    next(new AppError(429, 'MEDIA_UPLOAD_RATE_LIMITED', 'Too many media uploads. Please wait before trying again.'));
+  }
+});
+const mediaDirectUploadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   handler(_request, _response, next) {
@@ -497,6 +508,26 @@ export function createAdminRouter({
     router.get('/assets', async (_request, response) => {
       response.json({ assets: await gameLibraryService.listAssets() });
     });
+
+    router.post(
+      '/assets/upload-intent',
+      mediaDirectUploadLimiter,
+      validate(assetUploadIntentSchema),
+      async (request, response) => {
+        const upload = await gameLibraryService.createAssetUploadIntent(request.body);
+        response.status(201).json({ upload });
+      }
+    );
+
+    router.post(
+      '/assets/upload-complete',
+      mediaDirectUploadLimiter,
+      validate(assetUploadCompleteSchema),
+      async (request, response) => {
+        const asset = await gameLibraryService.completeAssetUpload(request.authenticated.user, request.body);
+        response.status(request.body.operation === 'upload' ? 201 : 200).json({ asset });
+      }
+    );
 
     router.get('/assets/:assetId/preview', validate(assetIdSchema, 'params'), async (request, response, next) => {
       try {

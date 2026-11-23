@@ -149,6 +149,9 @@ export function createGameLibraryRepository() {
     findAsset(assetId) {
       return MediaAsset.findById(assetId).lean();
     },
+    findAssetByStorageName(storageName) {
+      return MediaAsset.findOne({ storageName }).lean();
+    },
     createAsset(data) {
       return MediaAsset.create(data);
     },
