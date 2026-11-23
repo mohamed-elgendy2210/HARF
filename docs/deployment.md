@@ -17,7 +17,7 @@ Configure these variables as Vercel environment secrets, not in source control:
 - `VITE_API_BASE_URL=` for same-origin API routing
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_FROM`, and optional paired `SMTP_USER`/`SMTP_PASSWORD`
 
-On Vercel, the API trusts the single Vercel HTTPS proxy hop and uses `/tmp/harf-media` for temporary uploads so initialization does not attempt to write into the read-only deployment bundle. `/tmp` is ephemeral: configure a durable object-storage integration before relying on uploaded logos, media, specialist documents, or payment receipts. The production configuration rejects HTTP browser origins and requires HTTPS. Add the actual custom domain or Vercel domain to `APP_ORIGIN` and `CLIENT_ORIGINS` before deployment. Never add `MONGODB_URI`, SMTP passwords, or API credentials to `vercel.json` or commit them.
+On Vercel, the API trusts the single Vercel HTTPS proxy hop. Uploaded game media, specialist verification documents, and payment receipts use a private Vercel Blob store. Connect the store to the project in **Production** and **Preview**, and enable the read-write token environment variable so `BLOB_READ_WRITE_TOKEN` is available to the API. Local development continues to use the configured filesystem directory. The production configuration rejects HTTP browser origins and requires HTTPS. Add the actual custom domain or Vercel domain to `APP_ORIGIN` and `CLIENT_ORIGINS` before deployment. Never add `MONGODB_URI`, SMTP passwords, or API credentials to `vercel.json` or commit them.
 
 ## Local development
 

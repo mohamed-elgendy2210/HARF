@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileTypeFromBuffer } from 'file-type';
 import { AppError } from '../middleware/errors.js';
+import { FileStorage } from './fileStorage.js';
 
 const MAX_SIZES = Object.freeze({
   image: 5 * 1024 * 1024,
@@ -163,7 +163,7 @@ export function serializeAsset(asset, { includeUrl = true } = {}) {
 export class MediaAssetService {
   constructor({ repository, storageDirectory, now = () => new Date() }) {
     this.repository = repository;
-    this.storageDirectory = path.resolve(storageDirectory);
+    this.storage = new FileStorage({ storageDirectory: path.resolve(storageDirectory), blobPrefix: 'media-assets' });
     this.now = now;
     this.publicAssetIdsCache = null;
     this.publicAssetIdsCacheExpiresAt = 0;
@@ -172,7 +172,7 @@ export class MediaAssetService {
   }
 
   async initialize() {
-    await mkdir(this.storageDirectory, { recursive: true, mode: 0o700 });
+    await this.storage.initialize();
   }
 
   async listAssets() {
@@ -187,8 +187,7 @@ export class MediaAssetService {
     if (!file?.buffer) throw new AppError(400, 'FILE_REQUIRED', 'Choose a media file to upload.');
     const verified = await verifyFile(file.buffer, kind);
     const storageName = randomUUID();
-    const storagePath = path.join(this.storageDirectory, storageName);
-    await writeFile(storagePath, file.buffer, { flag: 'wx', mode: 0o600 });
+    await this.storage.write(storageName, file.buffer, verified.mimeType);
     try {
       const asset = await this.repository.createAsset({
         displayName,
@@ -207,7 +206,7 @@ export class MediaAssetService {
       });
       return serializeAsset(asset);
     } catch (error) {
-      await rm(storagePath, { force: true });
+      await this.storage.remove(storageName);
       throw error;
     }
   }
@@ -224,8 +223,7 @@ export class MediaAssetService {
     if (!asset) throw new AppError(404, 'ASSET_NOT_FOUND', 'The media asset was not found.');
     const verified = await verifyFile(file.buffer, asset.kind);
     const storageName = randomUUID();
-    const storagePath = path.join(this.storageDirectory, storageName);
-    await writeFile(storagePath, file.buffer, { flag: 'wx', mode: 0o600 });
+    await this.storage.write(storageName, file.buffer, verified.mimeType);
     let replacement;
     try {
       replacement = await this.repository.createAsset({
@@ -246,12 +244,12 @@ export class MediaAssetService {
       await this.repository.replaceDraftAssetReferences(String(assetId), String(replacement._id ?? replacement.id));
     } catch (error) {
       if (replacement) await this.repository.deleteAsset(String(replacement._id ?? replacement.id));
-      await rm(storagePath, { force: true });
+      await this.storage.remove(storageName);
       throw error;
     }
     if (!(await this.repository.isAssetReferenced(String(assetId)))) {
       await this.repository.deleteAsset(String(assetId));
-      await rm(path.join(this.storageDirectory, asset.storageName), { force: true });
+      await this.storage.remove(asset.storageName);
     }
     return serializeAsset(replacement);
   }
@@ -269,7 +267,7 @@ export class MediaAssetService {
       throw new AppError(409, 'ASSET_IN_USE', 'This asset is assigned to a draft or published game. Remove the assignments and publish the change before deleting it.');
     }
     await this.repository.deleteAsset(assetId);
-    await rm(path.join(this.storageDirectory, asset.storageName), { force: true });
+    await this.storage.remove(asset.storageName);
   }
 
   async readPublicAsset(assetId) {
@@ -320,14 +318,8 @@ export class MediaAssetService {
   }
 
   async readAssetFile(asset) {
-    const filePath = path.join(this.storageDirectory, asset.storageName);
-    let buffer;
-    try {
-      buffer = await readFile(filePath);
-    } catch (error) {
-      if (error.code === 'ENOENT') return null;
-      throw error;
-    }
+    const buffer = await this.storage.read(asset.storageName);
+    if (!buffer) return null;
     const verified = await verifyFile(buffer, asset.kind);
     if (verified.mimeType !== asset.mimeType) {
       throw new AppError(500, 'MEDIA_FILE_INVALID', 'The stored media file does not match its verified metadata.');
@@ -336,12 +328,6 @@ export class MediaAssetService {
   }
 
   async isAvailable(asset) {
-    try {
-      await access(path.join(this.storageDirectory, asset.storageName));
-      return true;
-    } catch (error) {
-      if (error.code === 'ENOENT') return false;
-      throw error;
-    }
+    return this.storage.exists(asset.storageName);
   }
 }

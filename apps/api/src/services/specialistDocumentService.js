@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import { fileTypeFromBuffer } from 'file-type';
 import { AppError } from '../middleware/errors.js';
+import { FileStorage } from './fileStorage.js';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DOCUMENT_KEYS = ['profilePhoto', 'medicalCardFront', 'medicalCardBack'];
@@ -11,11 +10,14 @@ const DOCUMENT_KEY_SET = new Set(DOCUMENT_KEYS);
 
 export class SpecialistDocumentService {
   constructor({ storageDirectory }) {
-    this.storageDirectory = path.resolve(storageDirectory);
+    this.storage = new FileStorage({
+      storageDirectory,
+      blobPrefix: 'specialist-verification'
+    });
   }
 
   async initialize() {
-    await mkdir(this.storageDirectory, { recursive: true, mode: 0o700 });
+    await this.storage.initialize();
   }
 
   async storeRequired(files) {
@@ -49,36 +51,26 @@ export class SpecialistDocumentService {
     try {
       for (const key of DOCUMENT_KEYS) {
         const storageName = metadata[key].storageName;
-        await writeFile(path.join(this.storageDirectory, storageName), uploads[key].buffer, {
-          flag: 'wx',
-          mode: 0o600
-        });
+        await this.storage.write(storageName, uploads[key].buffer, metadata[key].mimeType);
         written.push(storageName);
       }
       return metadata;
     } catch (error) {
-      await Promise.all(written.map((storageName) => rm(path.join(this.storageDirectory, storageName), { force: true })));
+      await Promise.all(written.map((storageName) => this.storage.remove(storageName)));
       throw error;
     }
   }
 
   async read(document) {
     if (!document?.storageName || !/^[a-f\d-]{36}$/i.test(document.storageName)) return null;
-    try {
-      return {
-        buffer: await readFile(path.join(this.storageDirectory, document.storageName)),
-        mimeType: document.mimeType
-      };
-    } catch (error) {
-      if (error.code === 'ENOENT') return null;
-      throw error;
-    }
+    const buffer = await this.storage.read(document.storageName);
+    return buffer ? { buffer, mimeType: document.mimeType } : null;
   }
 
   async remove(documents) {
     const stored = DOCUMENT_KEYS
       .map((key) => documents?.[key]?.storageName)
       .filter((name) => typeof name === 'string' && /^[a-f\d-]{36}$/i.test(name));
-    await Promise.all(stored.map((name) => rm(path.join(this.storageDirectory, name), { force: true })));
+    await Promise.all(stored.map((name) => this.storage.remove(name)));
   }
 }

@@ -141,7 +141,8 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
     notificationService,
     logger,
     receiptService: new PaymentReceiptService({
-      storageDirectory: path.join(config.mediaStorageDir, 'payment-receipts')
+      storageDirectory: path.join(config.mediaStorageDir, 'payment-receipts'),
+      blobPrefix: 'payment-receipts'
     })
   });
   await subscriptionService.receiptService.initialize();
@@ -150,7 +151,8 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
     paymentRepository,
     authRepository: repository,
     receiptService: new PaymentReceiptService({
-      storageDirectory: path.join(config.mediaStorageDir, 'session-payment-receipts')
+      storageDirectory: path.join(config.mediaStorageDir, 'session-payment-receipts'),
+      blobPrefix: 'session-payment-receipts'
     }),
     appointmentService,
     notificationService,

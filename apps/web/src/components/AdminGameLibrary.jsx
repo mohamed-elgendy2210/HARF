@@ -217,6 +217,7 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
   const loadData = async () => {
     setLoading(true);
     setError('');
+    let loaded = false;
     try {
       const [library, media] = await Promise.all([
         apiRequest('/api/v1/admin/games'),
@@ -230,11 +231,13 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
       setSelectedGameId((current) => library.games.some((game) => game.gameId === current)
         ? current
         : library.games[0]?.gameId ?? '');
+      loaded = true;
     } catch (requestError) {
       setError(requestError.message);
     } finally {
       setLoading(false);
     }
+    return loaded;
   };
 
   useEffect(() => {
@@ -599,8 +602,10 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
         method: 'POST',
         body: formData
       });
-      await loadData();
-      setNotice('تم استبدال الملف وإنشاء أصل جديد. تم تحديث المسودات إلى الأصل الجديد مع الاحتفاظ بمراجع النسخ المنشورة القديمة.');
+      const loaded = await loadData();
+      if (loaded) {
+        setNotice('تم استبدال الملف وإنشاء أصل جديد. تم تحديث المسودات إلى الأصل الجديد مع الاحتفاظ بمراجع النسخ المنشورة القديمة.');
+      }
     } catch (requestError) {
       setError(requestError.message);
     } finally {

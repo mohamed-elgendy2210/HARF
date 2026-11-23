@@ -1,19 +1,21 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import { fileTypeFromBuffer } from 'file-type';
 import { AppError } from '../middleware/errors.js';
+import { FileStorage } from './fileStorage.js';
 
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'application/pdf']);
 
 export class PaymentReceiptService {
-  constructor({ storageDirectory }) {
-    this.storageDirectory = path.resolve(storageDirectory);
+  constructor({ storageDirectory, blobPrefix = 'payment-receipts' }) {
+    this.storage = new FileStorage({
+      storageDirectory,
+      blobPrefix
+    });
   }
 
   async initialize() {
-    await mkdir(this.storageDirectory, { recursive: true, mode: 0o700 });
+    await this.storage.initialize();
   }
 
   async store(file, { imagesOnly = false } = {}) {
@@ -27,21 +29,17 @@ export class PaymentReceiptService {
       throw new AppError(400, 'UNSUPPORTED_RECEIPT_TYPE', 'ارفع صورة PNG أو JPEG أو WebP صالحة.');
     }
     const storageName = randomUUID();
-    await writeFile(path.join(this.storageDirectory, storageName), file.buffer, { flag: 'wx', mode: 0o600 });
+    await this.storage.write(storageName, file.buffer, detected.mime);
     return { storageName, mimeType: detected.mime, sizeBytes: file.buffer.length };
   }
 
   async read(receipt) {
     if (!receipt?.storageName || !/^[a-f\d-]{36}$/i.test(receipt.storageName)) return null;
-    try {
-      return { buffer: await readFile(path.join(this.storageDirectory, receipt.storageName)), mimeType: receipt.mimeType };
-    } catch (error) {
-      if (error.code === 'ENOENT') return null;
-      throw error;
-    }
+    const buffer = await this.storage.read(receipt.storageName);
+    return buffer ? { buffer, mimeType: receipt.mimeType } : null;
   }
 
   async remove(receipt) {
-    if (receipt?.storageName) await rm(path.join(this.storageDirectory, receipt.storageName), { force: true });
+    if (receipt?.storageName) await this.storage.remove(receipt.storageName);
   }
 }
