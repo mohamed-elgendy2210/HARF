@@ -2,6 +2,7 @@ import { GameDefinition } from '../models/GameDefinition.js';
 import { GameSetting } from '../models/GameSetting.js';
 import { GameVersion } from '../models/GameVersion.js';
 import { MediaAsset } from '../models/MediaAsset.js';
+import { PlatformSettings } from '../models/PlatformSettings.js';
 import { getGame } from '../games/catalog.js';
 
 const BUILT_IN_GAME_IDS = ['first-letter-trial', 'word-sounds', 'word-match', 'matching-pairs', 'animal-sounds'];
@@ -159,16 +160,22 @@ export function createGameLibraryRepository() {
       ).lean();
     },
     async isAssetReferenced(assetId) {
-      const [draftReference, versionReference] = await Promise.all([
+      const [draftReference, versionReference, platformReference] = await Promise.all([
         GameDefinition.exists({ draftAssetIds: assetId }),
-        GameVersion.exists({ assetIds: assetId })
+        GameVersion.exists({ assetIds: assetId }),
+        PlatformSettings.exists({
+          $or: [{ logoAssetId: assetId }, { heroImageAssetIds: assetId }]
+        })
       ]);
-      return Boolean(draftReference || versionReference);
+      return Boolean(draftReference || versionReference || platformReference);
     },
     async listAssetUsage(assetId) {
-      const [definitions, versions] = await Promise.all([
+      const [definitions, versions, platformSettings] = await Promise.all([
         GameDefinition.find({ draftAssetIds: assetId }).select('gameId draftContent').lean(),
-        GameVersion.find({ assetIds: assetId }).select('gameId version content').lean()
+        GameVersion.find({ assetIds: assetId }).select('gameId version content').lean(),
+        PlatformSettings.find({
+          $or: [{ logoAssetId: assetId }, { heroImageAssetIds: assetId }]
+        }).select('logoAssetId heroImageAssetIds').lean()
       ]);
       const uses = [];
       const addContentUses = (gameId, title, source, version, content) => {
@@ -211,6 +218,26 @@ export function createGameLibraryRepository() {
       });
       versions.forEach(({ gameId, version, content }) => {
         addContentUses(gameId, content.title, 'نسخة منشورة', version, content);
+      });
+      platformSettings.forEach((settings) => {
+        if (String(settings.logoAssetId) === String(assetId)) {
+          uses.push({
+            gameId: 'platform-settings',
+            title: 'هوية المنصة',
+            source: 'إعدادات المنصة',
+            version: null,
+            location: 'شعار المنصة'
+          });
+        }
+        if ((settings.heroImageAssetIds ?? []).some((id) => String(id) === String(assetId))) {
+          uses.push({
+            gameId: 'platform-settings',
+            title: 'الصفحة الرئيسية',
+            source: 'إعدادات المنصة',
+            version: null,
+            location: 'صور المقدمة'
+          });
+        }
       });
       return uses;
     },

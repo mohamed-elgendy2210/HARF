@@ -264,7 +264,7 @@ export class MediaAssetService {
     const asset = await this.repository.findAsset(assetId);
     if (!asset) throw new AppError(404, 'ASSET_NOT_FOUND', 'The media asset was not found.');
     if (await this.repository.isAssetReferenced(assetId)) {
-      throw new AppError(409, 'ASSET_IN_USE', 'This asset is assigned to a draft or published game. Remove the assignments and publish the change before deleting it.');
+      throw new AppError(409, 'ASSET_IN_USE', 'This asset is assigned to a game draft, published game, or platform identity. Remove its assignments before deleting it.');
     }
     await this.repository.deleteAsset(assetId);
     await this.storage.remove(asset.storageName);

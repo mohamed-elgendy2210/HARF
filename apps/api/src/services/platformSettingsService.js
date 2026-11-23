@@ -23,13 +23,13 @@ const DEFAULT_SETTINGS = Object.freeze({
   }
 });
 
-function serialize(settings, heroImages = []) {
+function serialize(settings, heroImages = [], logoAvailable = true) {
   if (!settings) return DEFAULT_SETTINGS;
   const logoAssetId = settings.logoAssetId ? String(settings.logoAssetId) : null;
   return {
     logoAssetId,
-    logoUrl: logoAssetId ? `/api/v1/platform/logo/${logoAssetId}` : null,
-    heroImageAssetIds: (settings.heroImageAssetIds ?? []).map(String),
+    logoUrl: logoAssetId && logoAvailable ? `/api/v1/platform/logo/${logoAssetId}` : null,
+    heroImageAssetIds: heroImages.map(({ id }) => String(id)),
     heroImages,
     colors: { ...DEFAULT_SETTINGS.colors, ...(settings.colors ?? {}) },
     homepage: settings.homepage,
@@ -46,11 +46,20 @@ export class PlatformSettingsService {
 
   async getPublicSettings() {
     const settings = await this.repository.getSettings();
-    return serialize(settings, await this.getAvailableHeroImages(settings));
+    const [heroImages, logoAvailable] = await Promise.all([
+      this.getAvailableHeroImages(settings),
+      this.isLogoAvailable(settings)
+    ]);
+    return serialize(settings, heroImages, logoAvailable);
   }
 
   async getAdminSettings() {
-    return serialize(await this.repository.getSettings());
+    const settings = await this.repository.getSettings();
+    const [heroImages, logoAvailable] = await Promise.all([
+      this.getAvailableHeroImages(settings),
+      this.isLogoAvailable(settings)
+    ]);
+    return serialize(settings, heroImages, logoAvailable);
   }
 
   async getAvailableHeroImages(settings) {
@@ -65,6 +74,12 @@ export class PlatformSettingsService {
       altText: asset.altText ?? asset.displayName,
       category: asset.category ?? ''
     }));
+  }
+
+  async isLogoAvailable(settings) {
+    if (!settings?.logoAssetId) return false;
+    const asset = await this.repository.findActiveImageAsset(settings.logoAssetId);
+    return Boolean(asset && await this.mediaAssetService.isAvailable(asset));
   }
 
   async readPublicLogo(assetId) {
@@ -117,6 +132,10 @@ export class PlatformSettingsService {
         }
       });
     }
-    return serialize(settings);
+    const [heroImages, logoAvailable] = await Promise.all([
+      this.getAvailableHeroImages(settings),
+      this.isLogoAvailable(settings)
+    ]);
+    return serialize(settings, heroImages, logoAvailable);
   }
 }

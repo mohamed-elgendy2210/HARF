@@ -1287,7 +1287,7 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
                             </li>
                           ))}
                         </ul>
-                      ) : <p>لا توجد مراجع في مسودات الألعاب أو نسخها المنشورة.</p>}
+                      ) : <p>لا توجد مراجع في مسودات الألعاب أو نسخها المنشورة أو هوية المنصة.</p>}
                     </details>
                   </article>
                 ))}

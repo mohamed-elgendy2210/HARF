@@ -125,6 +125,7 @@ test('public platform settings skip legacy hero images missing from Blob', async
   const platformSettingsService = new PlatformSettingsService({
     repository: {
       getSettings: async () => ({
+        logoAssetId: 'asset-id',
         heroImageAssetIds: ['asset-id'],
         homepage: {}
       }),
@@ -138,5 +139,11 @@ test('public platform settings skip legacy hero images missing from Blob', async
   });
 
   const settings = await platformSettingsService.getPublicSettings();
+  assert.equal(settings.logoUrl, null);
+  assert.deepEqual(settings.heroImageAssetIds, []);
   assert.deepEqual(settings.heroImages, []);
+
+  const adminSettings = await platformSettingsService.getAdminSettings();
+  assert.equal(adminSettings.logoUrl, null);
+  assert.deepEqual(adminSettings.heroImageAssetIds, []);
 });

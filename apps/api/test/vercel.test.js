@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -29,4 +30,14 @@ test('Vercel uses its trusted HTTPS proxy and writable temporary media directory
     trustProxy: 1,
     mediaStorageDir: path.resolve(tmpdir(), 'harf-media')
   });
+});
+
+test('Vercel routes API requests to the function and nested frontend routes to the SPA', async () => {
+  const vercelConfigPath = fileURLToPath(new URL('../../../vercel.json', import.meta.url));
+  const vercelConfig = JSON.parse(await readFile(vercelConfigPath, 'utf8'));
+
+  assert.deepEqual(vercelConfig.rewrites, [
+    { source: '/api/(.*)', destination: '/api' },
+    { source: '/(.*)', destination: '/index.html' }
+  ]);
 });

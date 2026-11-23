@@ -171,6 +171,7 @@ export function GameAudio({
     utterance.volume = volume;
     utterance.onend = () => {
       setSpeaking(false);
+      setAudioError(false);
       setAudioState('ended');
       onPlaybackStateChange?.('ended');
     };
