@@ -131,6 +131,83 @@ export function createGameRepository() {
       ]);
       return { attempts, total };
     },
+    async getChildProgressAnalytics(parentUserId, childId, { from, to, bucketUnit }) {
+      const [result = {}] = await GameAttempt.aggregate([
+        {
+          $match: {
+            parentUserId: parentUserId instanceof mongoose.Types.ObjectId
+              ? parentUserId
+              : new mongoose.Types.ObjectId(String(parentUserId)),
+            childId: childId instanceof mongoose.Types.ObjectId
+              ? childId
+              : new mongoose.Types.ObjectId(String(childId)),
+            completedAt: { $gte: from, $lt: to }
+          }
+        },
+        {
+          $project: {
+            gameId: 1,
+            scorePercent: {
+              $multiply: [{ $divide: ['$correctCount', '$totalQuestions'] }, 100]
+            },
+            bucket: {
+              $dateTrunc: {
+                date: '$completedAt',
+                unit: bucketUnit,
+                timezone: 'UTC',
+                ...(bucketUnit === 'week' ? { startOfWeek: 'monday' } : {})
+              }
+            },
+            activeDay: {
+              $dateTrunc: {
+                date: '$completedAt',
+                unit: 'day',
+                timezone: 'UTC'
+              }
+            }
+          }
+        },
+        {
+          $facet: {
+            performance: [
+              {
+                $group: {
+                  _id: { gameId: '$gameId', bucket: '$bucket' },
+                  attempts: { $sum: 1 },
+                  averageScore: { $avg: '$scorePercent' }
+                }
+              },
+              { $sort: { '_id.gameId': 1, '_id.bucket': 1 } },
+              {
+                $project: {
+                  _id: 0,
+                  gameId: '$_id.gameId',
+                  date: '$_id.bucket',
+                  attempts: 1,
+                  averageScore: { $round: ['$averageScore', 1] }
+                }
+              }
+            ],
+            activeDays: [
+              { $group: { _id: '$activeDay' } },
+              { $count: 'value' }
+            ],
+            games: [
+              { $group: { _id: '$gameId', attempts: { $sum: 1 } } },
+              { $sort: { _id: 1 } },
+              { $project: { _id: 0, gameId: '$_id', attempts: 1 } }
+            ],
+            total: [{ $count: 'value' }]
+          }
+        }
+      ]);
+      return {
+        totalAttempts: result.total?.[0]?.value ?? 0,
+        activeDays: result.activeDays?.[0]?.value ?? 0,
+        games: result.games ?? [],
+        series: result.performance ?? []
+      };
+    },
     getChildActivityResults(parentUserId, childId, gameIds, sampleSize) {
       if (!gameIds.length) return [];
       return GameAttempt.aggregate([

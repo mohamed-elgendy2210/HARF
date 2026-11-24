@@ -12,7 +12,9 @@ import {
   appointmentDecisionSchema,
   appointmentParamsSchema,
   createAppointmentSchema,
-  completeAppointmentSessionSchema
+  completeAppointmentSessionSchema,
+  sessionReportDraftSchema,
+  publishSessionReportSchema
 } from '../validation/appointments.js';
 
 const appointmentRequestLimiter = rateLimit({
@@ -86,6 +88,23 @@ export function createAppointmentsRouter({ authenticationMiddleware, appointment
       request.authenticated.user,
       request.params.appointmentId,
       request.body
+    );
+    response.json({ appointment });
+  });
+
+  router.put('/:appointmentId/session-report', requireRole('specialist'), requireCsrf, validate(appointmentParamsSchema, 'params'), validate(sessionReportDraftSchema), async (request, response) => {
+    const appointment = await appointmentService.saveSessionReportDraft(
+      request.authenticated.user,
+      request.params.appointmentId,
+      request.body
+    );
+    response.json({ appointment });
+  });
+
+  router.post('/:appointmentId/session-report/publish', requireRole('specialist'), requireCsrf, validate(appointmentParamsSchema, 'params'), validate(publishSessionReportSchema), async (request, response) => {
+    const appointment = await appointmentService.publishSessionReport(
+      request.authenticated.user,
+      request.params.appointmentId
     );
     response.json({ appointment });
   });

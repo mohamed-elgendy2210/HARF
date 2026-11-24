@@ -111,17 +111,30 @@ function serializeAppointment(record, viewerRole) {
         }))
       } } : {})
   };
-  if (viewerRole === 'parent' && record.parentProgressReport?.createdAt) {
+  const report = record.parentProgressReport;
+  const isPublishedReport = report?.status === 'published'
+    || (!report?.status && report?.createdAt);
+  if (viewerRole === 'parent' && isPublishedReport) {
     appointment.parentProgressReport = {
-      summary: record.parentProgressReport.summary,
-      suggestedActivities: record.parentProgressReport.suggestedActivities,
-      createdAt: record.parentProgressReport.createdAt
+      status: 'published',
+      summary: report.sessionSummary || report.summary || '',
+      suggestedActivities: report.suggestedActivities ?? [],
+      sessionSummary: report.sessionSummary || report.summary || '',
+      sessionGoals: report.sessionGoals ?? '',
+      activitiesPerformed: report.activitiesPerformed ?? '',
+      specialistObservations: report.specialistObservations ?? '',
+      positiveAchievements: report.positiveAchievements ?? '',
+      furtherPractice: report.furtherPractice ?? '',
+      parentRecommendations: report.parentRecommendations ?? '',
+      nextSessionPlan: report.nextSessionPlan ?? '',
+      createdAt: report.createdAt,
+      publishedAt: report.publishedAt ?? report.createdAt
     };
   }
   if (viewerRole === 'specialist') {
     appointment.privateSpecialistNotes = record.privateSpecialistNotes ?? '';
-    appointment.parentProgressReport = record.parentProgressReport?.createdAt
-      ? record.parentProgressReport
+    appointment.parentProgressReport = report?.createdAt
+      ? report
       : null;
   }
   return appointment;
@@ -405,6 +418,14 @@ export class AppointmentService {
       ? await this.repository.listParentAppointments(userId)
       : await this.repository.listSpecialistAppointments(userId);
     return Promise.all(records.map((record) => this.serializeForViewer(record, user.role)));
+  }
+
+  async assertSpecialistAssignedChild(specialistUserId, childId) {
+    const assignment = await this.repository.findSpecialistChildAssignment(specialistUserId, childId);
+    if (!assignment) {
+      throw new AppError(404, 'SPECIALIST_CHILD_NOT_ASSIGNED', 'لا يتوفر ملف الطفل إلا ضمن موعد مؤكد مع هذا الأخصائي.');
+    }
+    return assignment;
   }
 
   async listAdminAppointments(query) {
@@ -742,6 +763,103 @@ export class AppointmentService {
       resourceType: 'appointment',
       resourceId: appointmentId,
       actionUrl: `/dashboard?section=appointments&appointmentId=${encodeURIComponent(appointmentId)}`
+    });
+    return serializeAppointment(updated, 'specialist');
+  }
+
+  async saveSessionReportDraft(specialist, appointmentId, report) {
+    const specialistUserId = idOf(specialist);
+    const owned = await this.repository.findOwnedAppointment(
+      appointmentId,
+      'specialistUserId',
+      specialistUserId
+    );
+    if (!owned) throw new AppError(404, 'APPOINTMENT_NOT_FOUND', 'The appointment was not found.');
+    if (owned.status !== 'accepted' || owned.sessionStatus !== 'completed') {
+      throw new AppError(409, 'APPOINTMENT_SESSION_NOT_COMPLETED', 'A session report can only be saved after the session is completed.');
+    }
+    if (!await this.childService.hasConsent(
+      idOf(owned.parentUserId),
+      idOf(owned.childId),
+      'progress_reports'
+    )) {
+      throw new AppError(403, 'PROGRESS_REPORT_CONSENT_REQUIRED', 'The parent must enable progress-report consent before a report can be saved.');
+    }
+    const existing = owned.parentProgressReport;
+    if (existing?.status === 'published' || (existing?.createdAt && !existing.status)) {
+      throw new AppError(409, 'SESSION_REPORT_ALREADY_PUBLISHED', 'A published session report cannot be changed.');
+    }
+    const now = this.now();
+    const updated = await this.repository.saveSessionReportDraft(
+      appointmentId,
+      specialistUserId,
+      report,
+      existing?.createdAt ?? now,
+      now
+    );
+    if (!updated) {
+      throw new AppError(409, 'SESSION_REPORT_NOT_EDITABLE', 'The session report is no longer available for editing.');
+    }
+    await this.audit('appointment.session_report_draft_saved', specialist, owned.parentUserId, {
+      appointmentId,
+      childId: idOf(owned.childId)
+    });
+    return serializeAppointment(updated, 'specialist');
+  }
+
+  async publishSessionReport(specialist, appointmentId) {
+    const specialistUserId = idOf(specialist);
+    const owned = await this.repository.findOwnedAppointment(
+      appointmentId,
+      'specialistUserId',
+      specialistUserId
+    );
+    if (!owned) throw new AppError(404, 'APPOINTMENT_NOT_FOUND', 'The appointment was not found.');
+    if (owned.status !== 'accepted' || owned.sessionStatus !== 'completed') {
+      throw new AppError(409, 'APPOINTMENT_SESSION_NOT_COMPLETED', 'A session report can only be published after the session is completed.');
+    }
+    if (!await this.childService.hasConsent(
+      idOf(owned.parentUserId),
+      idOf(owned.childId),
+      'progress_reports'
+    )) {
+      throw new AppError(403, 'PROGRESS_REPORT_CONSENT_REQUIRED', 'The parent must enable progress-report consent before a report can be published.');
+    }
+    const report = owned.parentProgressReport;
+    if (report?.status === 'published' || (report?.createdAt && !report.status)) {
+      return serializeAppointment(owned, 'specialist');
+    }
+    if (report?.status !== 'draft' || !report.sessionSummary?.trim()) {
+      throw new AppError(409, 'SESSION_REPORT_INCOMPLETE', 'A session summary is required before the report can be published.');
+    }
+    const updated = await this.repository.publishSessionReport(
+      appointmentId,
+      specialistUserId,
+      this.now()
+    );
+    if (!updated) {
+      const current = await this.repository.findOwnedAppointment(
+        appointmentId,
+        'specialistUserId',
+        specialistUserId
+      );
+      if (current?.parentProgressReport?.status === 'published') {
+        return serializeAppointment(current, 'specialist');
+      }
+      throw new AppError(409, 'SESSION_REPORT_NOT_PUBLISHABLE', 'The session report could not be published.');
+    }
+    await this.audit('appointment.session_report_published', specialist, updated.parentUserId, {
+      appointmentId,
+      childId: idOf(updated.childId)
+    });
+    await this.notify(updated.parentUserId, {
+      type: NOTIFICATION_TYPES.SESSION_REPORT,
+      title: 'نشر الأخصائي تقرير الجلسة',
+      message: 'أصبح تقرير الجلسة متاحًا في صفحة التقارير.',
+      resourceType: 'appointment',
+      resourceId: idOf(updated),
+      dedupeKey: `session-report-published:${appointmentId}`,
+      actionUrl: `/dashboard?section=reports&childId=${encodeURIComponent(idOf(updated.childId))}`
     });
     return serializeAppointment(updated, 'specialist');
   }

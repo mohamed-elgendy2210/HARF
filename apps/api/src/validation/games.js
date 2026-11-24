@@ -45,6 +45,11 @@ export const childAttemptsQuerySchema = z.object({
   gameId: gameId.optional()
 }).strict();
 
+export const childProgressAnalyticsQuerySchema = z.object({
+  period: z.enum(['weekly', 'monthly']).default('weekly'),
+  gameId: gameId.optional()
+}).strict();
+
 export const gameChildQuerySchema = z.object({
   childId: childId.optional()
 }).strict();

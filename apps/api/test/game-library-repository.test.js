@@ -4,6 +4,8 @@ import { createGameLibraryRepository } from '../src/db/gameLibraryRepository.js'
 import { GameDefinition } from '../src/models/GameDefinition.js';
 import { GameVersion } from '../src/models/GameVersion.js';
 import { PlatformSettings } from '../src/models/PlatformSettings.js';
+import { LearningLevel } from '../src/models/LearningLevel.js';
+import { RewardDefinition } from '../src/models/RewardDefinition.js';
 
 test('platform logos and hero images count as media asset references', async (t) => {
   const assetId = '6ae1ea54ca58aee3fa8e4e6b';
@@ -15,6 +17,8 @@ test('platform logos and hero images count as media asset references', async (t)
     });
     return { _id: 'platform-settings' };
   });
+  t.mock.method(LearningLevel, 'exists', async () => null);
+  t.mock.method(RewardDefinition, 'exists', async () => null);
 
   const isReferenced = await createGameLibraryRepository().isAssetReferenced(assetId);
 

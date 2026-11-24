@@ -15,6 +15,7 @@ import {
 } from './GameComponents.jsx';
 import { playGameAudio, stopGameAudio } from '../../lib/gameAudio.js';
 import SpatialGameActivity from './SpatialGameActivity.jsx';
+import LearningAdventureMap from './LearningAdventureMap.jsx';
 
 const gameNames = {
   'first-letter-trial': 'رحلة الحرف الأول',
@@ -58,27 +59,50 @@ function GameHeader({ backHref = '/games', showAuth = true, immersive = false, o
 function GameCatalog({ settings }) {
   const [games, setGames] = useState([]);
   const [assignedPaths, setAssignedPaths] = useState([]);
+  const [journeyLevels, setJourneyLevels] = useState([]);
+  const [totalStars, setTotalStars] = useState(0);
+  const [starsByGame, setStarsByGame] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState('');
   const childId = new URLSearchParams(window.location.search).get('childId') ?? '';
 
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError('');
+    setErrorCode('');
     setGames([]);
     setAssignedPaths([]);
+    setJourneyLevels([]);
+    setTotalStars(0);
+    setStarsByGame({});
     const request = childId
-      ? apiRequest(`/api/v1/children/${encodeURIComponent(childId)}/learning-activities`)
+      ? Promise.all([
+        apiRequest(`/api/v1/children/${encodeURIComponent(childId)}/learning-activities`),
+        apiRequest(`/api/v1/children/${encodeURIComponent(childId)}/learning-journey`),
+        apiRequest(`/api/v1/children/${encodeURIComponent(childId)}/rewards`)
+      ])
       : apiRequest('/api/v1/games');
     request
-      .then((catalog) => {
+      .then((result) => {
         if (!active) return;
-        setGames(childId ? catalog.activities : catalog.games);
-        if (childId) setAssignedPaths(catalog.paths);
+        if (childId) {
+          const [catalog, journey, rewards] = result;
+          setGames(catalog.activities);
+          setAssignedPaths(catalog.paths);
+          setJourneyLevels(journey.levels);
+          setTotalStars(rewards.totalStars);
+          setStarsByGame(rewards.starsByGame ?? {});
+        } else {
+          setGames(result.games);
+        }
       })
       .catch((requestError) => {
-        if (active) setError(requestError.message);
+        if (active) {
+          setError(requestError.message);
+          setErrorCode(requestError.code ?? '');
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -102,15 +126,23 @@ function GameCatalog({ settings }) {
       <main className="game-page__main">
         <header className="game-page__intro">
           <span className="dashboard-eyebrow">حرف · ألعاب تعليمية</span>
-          <h1>{childId ? 'أنشطة المسار التعليمي' : 'اختاروا لعبة وابدأوا معًا'}</h1>
+          <h1>{childId ? 'هيا نبدأ المغامرة!' : 'اختاروا لعبة وابدأوا معًا'}</h1>
           <p>{childId
-            ? assignedPaths.length
-              ? `الأنشطة المعروضة تخص ${assignedPaths.map(({ title }) => title).join('، ')}.`
-              : 'أنشطة قصيرة للتدرب على أصوات الحروف والكلمات. النتائج تعليمية وليست تشخيصًا.'
+            ? 'اكتشف المحطات، واجتز التحديات، واجمع النجوم في رحلتك التعليمية.'
             : 'أنشطة قصيرة للتدرب على أصوات الحروف والكلمات. النتائج تعليمية وليست تشخيصًا.'}</p>
         </header>
         {loading && <p className="dashboard-loading" role="status">جارٍ تحميل الألعاب…</p>}
-        {error && <p className="game-error" role="alert">{error}</p>}
+        {error && (
+          <div className="game-error" role="alert">
+            <p>{error}</p>
+            {errorCode === 'LEARNING_CONSENT_REQUIRED' && childId && (
+              <a className="button button--outline"
+                href={`/dashboard?section=profile&childId=${encodeURIComponent(childId)}`}>
+                إدارة موافقة حفظ أنشطة التعلّم
+              </a>
+            )}
+          </div>
+        )}
         {!loading && !error && childId && assignedPaths.length === 0 && (
           <section className="game-message-card" role="status">
             <h2>لم يتم تحديد المسار التعليمي لطفلك بعد.</h2>
@@ -124,7 +156,17 @@ function GameCatalog({ settings }) {
         {!loading && !error && childId && assignedPaths.length > 0 && games.length === 0 && (
           <p className="game-message-card" role="status">المسار التعليمي الحالي لا يحتوي على أنشطة متاحة حاليًا.</p>
         )}
-        {!loading && !error && (!childId || assignedPaths.length > 0) && games.length > 0 && (
+        {!loading && !error && childId && assignedPaths.length > 0 && games.length > 0 && (
+          <LearningAdventureMap
+            games={games}
+            levels={journeyLevels}
+            assignedPaths={assignedPaths}
+            totalStars={totalStars}
+            starsByGame={starsByGame}
+            gameHref={(id) => gameHref(id, childId)}
+          />
+        )}
+        {!loading && !error && !childId && games.length > 0 && (
           <div className="game-catalog" aria-label="الألعاب المتاحة">
             {games.map((game) => (
               <article className={`game-card${game.access === 'trial' ? ' game-card--trial' : ''}`} key={game.id}>
@@ -183,6 +225,10 @@ function GamePlay({ gameId }) {
   const [saved, setSaved] = useState(false);
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState('');
+  const previewMode = useMemo(
+    () => new URLSearchParams(window.location.search).get('preview') ?? '',
+    []
+  );
   const startedAt = useRef(0);
   const submissionId = useRef('');
   const completionRequestInFlight = useRef(false);
@@ -197,6 +243,8 @@ function GamePlay({ gameId }) {
     () => new URLSearchParams(window.location.search).get('source') === 'home',
     []
   );
+  const isAdminPreview = previewMode === 'admin';
+  const isTrial = game?.access === 'trial' || isAdminPreview;
 
   useEffect(() => {
     if (!completion) return undefined;
@@ -224,9 +272,19 @@ function GamePlay({ gameId }) {
       setLoading(true);
       setError('');
       try {
-        const { game: loadedGame } = await apiRequest(`/api/v1/games/${encodeURIComponent(gameId)}`);
+        const { game: loadedGame } = await apiRequest(
+          isAdminPreview
+            ? `/api/v1/admin/games/${encodeURIComponent(gameId)}/preview`
+            : `/api/v1/games/${encodeURIComponent(gameId)}`
+        );
         if (!active) return;
         setGame(loadedGame);
+
+        if (isAdminPreview) {
+          const session = await apiRequest('/api/v1/auth/session');
+          if (session.csrfToken) setCsrfToken(session.csrfToken);
+          return;
+        }
 
         if (loadedGame.access === 'trial') return;
 
@@ -250,12 +308,12 @@ function GamePlay({ gameId }) {
     return () => {
       active = false;
     };
-  }, [gameId, requestedChildId]);
+  }, [gameId, isAdminPreview, requestedChildId]);
 
   useEffect(() => {
     if (!selectedChildId || game?.access !== 'parent') {
       setHasConsent(false);
-      setActivityAccess(game?.access === 'trial' ? 'available' : 'checking');
+      setActivityAccess(game?.access === 'trial' || isAdminPreview ? 'available' : 'checking');
       return undefined;
     }
     let active = true;
@@ -283,18 +341,21 @@ function GamePlay({ gameId }) {
     return () => {
       active = false;
     };
-  }, [game, gameId, selectedChildId]);
+  }, [game, gameId, isAdminPreview, selectedChildId]);
 
-  const isTrial = game?.access === 'trial';
   const childPathId = selectedChildId || requestedChildId;
-  const returnHref = isTrial
-    ? enteredFromHomepage ? '/#trial-games' : '/games'
-    : requestedChildId
-      ? `/games?childId=${encodeURIComponent(childPathId)}`
-      : '/dashboard';
-  const returnLabel = isTrial
-    ? enteredFromHomepage ? 'العودة للألعاب التجريبية' : 'كل الألعاب'
-    : requestedChildId ? 'العودة لمسار الطفل' : 'لوحة الأسرة';
+  const returnHref = isAdminPreview
+    ? '/admin'
+    : isTrial
+      ? enteredFromHomepage ? '/#trial-games' : '/games'
+      : requestedChildId
+        ? `/games?childId=${encodeURIComponent(childPathId)}`
+        : '/dashboard';
+  const returnLabel = isAdminPreview
+    ? 'العودة إلى المكتبة'
+    : isTrial
+      ? enteredFromHomepage ? 'العودة للألعاب التجريبية' : 'كل الألعاب'
+      : requestedChildId ? 'العودة لمسار الطفل' : 'لوحة الأسرة';
   const currentQuestion = game?.questions[questionIndex];
   const companionState = feedback
     ? feedback.correct ? 'correct' : 'encouragement'
@@ -342,7 +403,10 @@ function GamePlay({ gameId }) {
     setSubmittingAnswer(true);
     setError('');
     try {
-      const { answer } = await apiRequest(`/api/v1/games/${encodeURIComponent(gameId)}/answer`, {
+      const answerPath = isAdminPreview
+        ? `/api/v1/admin/games/${encodeURIComponent(gameId)}/preview/answer`
+        : `/api/v1/games/${encodeURIComponent(gameId)}/answer`;
+      const { answer } = await apiRequest(answerPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -430,6 +494,7 @@ function GamePlay({ gameId }) {
         correctCount: attempt.correctCount,
         totalQuestions: attempt.totalQuestions,
         scorePercent: Math.round((attempt.correctCount / attempt.totalQuestions) * 100),
+        rewards: attempt.rewards,
         companion: game.companion,
         companionAnimal: game.companionAnimal,
         instructions: game.instructions,

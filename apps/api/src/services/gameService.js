@@ -23,6 +23,7 @@ export class GameService {
     childService,
     gameLibraryService = null,
     learningPathService = null,
+    gamificationService = null,
     subscriptionService = null,
     now = () => new Date()
   }) {
@@ -30,6 +31,7 @@ export class GameService {
     this.childService = childService;
     this.gameLibraryService = gameLibraryService;
     this.learningPathService = learningPathService;
+    this.gamificationService = gamificationService;
     this.subscriptionService = subscriptionService;
     this.now = now;
   }
@@ -70,10 +72,13 @@ export class GameService {
     parentUserId,
     childId,
     action,
-    position
+    position,
+    preview = false
   }) {
     const game = this.gameLibraryService
-      ? await this.gameLibraryService.getScoringGame(gameId, gameVersion ?? null)
+      ? preview
+        ? await this.gameLibraryService.getDraftScoringGame(gameId)
+        : await this.gameLibraryService.getScoringGame(gameId, gameVersion ?? null)
       : getGame(gameId);
     if (!game) throw new AppError(404, 'GAME_NOT_FOUND', 'The game was not found.');
     const content = this.gameLibraryService ? game.content : game;
@@ -152,6 +157,10 @@ export class GameService {
     return { correct };
   }
 
+  async checkPreviewAnswer(gameId, input) {
+    return this.checkAnswer(gameId, { ...input, preview: true });
+  }
+
   async recordChildAttempt(parentUserId, gameId, input) {
     const game = this.gameLibraryService
       ? await this.gameLibraryService.getScoringGame(gameId, input.gameVersion ?? null)
@@ -177,6 +186,7 @@ export class GameService {
       throw new AppError(403, 'LEARNING_CONSENT_REQUIRED', 'The parent must enable learning-data consent before this activity can be saved.');
     }
     await this.learningPathService?.assertActivityPlayable(parentUserId, input.childId, gameId);
+    await this.gamificationService?.assertActivityPlayable(parentUserId, input.childId, gameId);
 
     if (!input.submissionId) {
       throw new AppError(400, 'GAME_SESSION_REQUIRED', 'ابدأ جلسة جديدة وأكمل النشاط قبل حفظ النتيجة.');
@@ -187,7 +197,23 @@ export class GameService {
       gameId,
       submissionId: input.submissionId
     });
-    if (existingAttempt) return serializeAttempt(existingAttempt);
+    if (existingAttempt) {
+      const rewards = await this.gamificationService?.processCompletedAttempt(
+        parentUserId,
+        input.childId,
+        existingAttempt
+      );
+      await this.repository.deleteAnswerReceipts({
+        parentUserId,
+        childId: input.childId,
+        gameId,
+        submissionId: input.submissionId
+      });
+      return {
+        ...serializeAttempt(existingAttempt),
+        rewards: rewards ?? { scorePercent: null, awarded: [] }
+      };
+    }
 
     const receipts = await this.repository.listAnswerReceipts({
       parentUserId,
@@ -248,13 +274,21 @@ export class GameService {
       ...(spatialProgress ? { spatialProgress } : {}),
       completedAt: this.now()
     });
+    const rewards = await this.gamificationService?.processCompletedAttempt(
+      parentUserId,
+      input.childId,
+      attempt
+    );
     await this.repository.deleteAnswerReceipts({
       parentUserId,
       childId: input.childId,
       gameId,
       submissionId: input.submissionId
     });
-    return serializeAttempt(attempt);
+    return {
+      ...serializeAttempt(attempt),
+      rewards: rewards ?? { scorePercent: null, awarded: [] }
+    };
   }
 
   async listChildAttempts(parentUserId, childId, { page = 1, limit = 20, gameId } = {}) {
@@ -270,6 +304,39 @@ export class GameService {
       limit,
       total,
       hasMore: page * limit < total
+    };
+  }
+
+  async getChildProgressAnalytics(parentUserId, childId, period = 'weekly', gameId = '') {
+    await this.childService.getOwnedChild(parentUserId, childId);
+    if (!['weekly', 'monthly'].includes(period)) {
+      throw new AppError(400, 'INVALID_PROGRESS_PERIOD', 'The requested progress period is invalid.');
+    }
+    if (typeof this.repository.getChildProgressAnalytics !== 'function') {
+      throw new AppError(503, 'PROGRESS_ANALYTICS_UNAVAILABLE', 'Learning analytics are temporarily unavailable.');
+    }
+    const now = this.now();
+    const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const dayCount = period === 'weekly' ? 7 : 30;
+    const from = new Date(todayUtc - (dayCount - 1) * 24 * 60 * 60 * 1000);
+    const to = new Date(todayUtc + 24 * 60 * 60 * 1000);
+    const bucketUnit = period === 'weekly' ? 'day' : 'week';
+    const analytics = await this.repository.getChildProgressAnalytics(
+      parentUserId,
+      childId,
+      { from, to, bucketUnit }
+    );
+    return {
+      period,
+      from,
+      to,
+      totalAttempts: analytics.totalAttempts,
+      activeDays: analytics.activeDays,
+      games: analytics.games,
+      buckets: gameId
+        ? analytics.series.filter((item) => item.gameId === gameId)
+          .map(({ date, attempts, averageScore }) => ({ date, attempts, averageScore }))
+        : []
     };
   }
 }

@@ -77,3 +77,16 @@ export const completeAppointmentSessionSchema = z.object({
     suggestedActivities: z.array(z.string().trim().min(1).max(120)).max(5).default([])
   }).strict().optional()
 }).strict();
+
+export const sessionReportDraftSchema = z.object({
+  sessionSummary: z.string().trim().max(4000).default(''),
+  sessionGoals: z.string().trim().max(3000).default(''),
+  activitiesPerformed: z.string().trim().max(4000).default(''),
+  specialistObservations: z.string().trim().max(4000).default(''),
+  positiveAchievements: z.string().trim().max(3000).default(''),
+  furtherPractice: z.string().trim().max(3000).default(''),
+  parentRecommendations: z.string().trim().max(3000).default(''),
+  nextSessionPlan: z.string().trim().max(3000).default('')
+}).strict();
+
+export const publishSessionReportSchema = z.object({}).strict();

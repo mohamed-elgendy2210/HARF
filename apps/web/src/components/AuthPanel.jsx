@@ -461,9 +461,9 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
     );
   }
 
-  const platformBrand = document.querySelector('#root .platform-brand');
-  const platformStyles = platformBrand ? getComputedStyle(platformBrand) : null;
-  const modalThemeStyle = platformStyles
+  const themeRoot = document.querySelector('#root .platform-brand, #root .game-page');
+  const themeStyles = themeRoot ? getComputedStyle(themeRoot) : null;
+  const modalThemeStyle = themeStyles
     ? Object.fromEntries([
       '--blue',
       '--teal',
@@ -472,7 +472,7 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
       '--coral',
       '--ink',
       '--muted'
-    ].map((property) => [property, platformStyles.getPropertyValue(property).trim()]).filter(([, value]) => value))
+    ].map((property) => [property, themeStyles.getPropertyValue(property).trim()]).filter(([, value]) => value))
     : undefined;
 
   return (

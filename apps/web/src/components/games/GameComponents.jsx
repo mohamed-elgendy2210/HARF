@@ -361,6 +361,13 @@ export function GameCompletion({
   returnLabel = isTrial ? 'كل الألعاب' : 'لوحة الأسرة'
 }) {
   const successful = result.scorePercent >= 80;
+  const earnedStars = (result.rewards?.awarded ?? [])
+    .filter(({ type }) => type === 'stars')
+    .reduce((total, reward) => total + reward.quantity, 0);
+  const completedLevel = (result.rewards?.awarded ?? [])
+    .find(({ type }) => type === 'level-completed');
+  const revealedRewards = (result.rewards?.awarded ?? [])
+    .filter(({ type }) => type === 'badge' || type === 'gift');
   const videoRef = useRef(null);
   const [videoFailed, setVideoFailed] = useState(false);
   const [videoPlaying, setVideoPlaying] = useState(false);
@@ -476,6 +483,22 @@ export function GameCompletion({
         <p className="game-completion__score">
           {result.correctCount} من {result.totalQuestions} إجابات صحيحة · {result.scorePercent}٪
         </p>
+        {saved && earnedStars > 0 && (
+          <p className="game-completion__earned-stars" role="status" aria-live="polite">
+            ⭐ حصلت على {earnedStars} نجوم! أحسنت.
+          </p>
+        )}
+        {saved && completedLevel && (
+          <div className="game-completion__earned-stars" role="status" aria-live="polite">
+            <strong>{completedLevel.celebrationEnabled ? '🎉 أحسنت! أكملت المستوى' : 'أكملت المستوى'}</strong>
+            <p>{completedLevel.title}</p>
+            {revealedRewards.map((reward) => (
+              <p key={`${reward.type}-${reward.rewardId}`}>
+                {reward.type === 'badge' ? '🏅 الشارة الجديدة:' : '🎁 الهدية الجديدة:'} {reward.name}
+              </p>
+            ))}
+          </div>
+        )}
         {!successful && <p>تعال نجرب تاني! التدريب خطوة خطوة يساعدنا نتعلم.</p>}
         <p className="game-completion__note">
           هذه نتيجة نشاط تعليمي واحد، وليست تشخيصًا أو تقييمًا طبيًا.

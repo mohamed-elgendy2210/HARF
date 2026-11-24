@@ -38,6 +38,7 @@ import { createSessionPaymentRepository, ensureSessionPaymentIndexes } from './d
 import { SessionPaymentService } from './services/sessionPaymentService.js';
 import { createRoleRepository, ensureRoleIndexes, seedSystemRoles } from './db/roleRepository.js';
 import { RoleService } from './services/roleService.js';
+import { ensureGamificationIndexes, GamificationService } from './services/gamificationService.js';
 
 const logger = createLogger({ level: config.logLevel, isProduction: config.isProduction });
 
@@ -52,6 +53,7 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
       ensureSubscriptionIndexes(),
       ensurePaymentIndexes(),
       ensureLearningPathIndexes(),
+      ensureGamificationIndexes(),
       ensureAppointmentIndexes(),
       ensureNotificationIndexes(),
       ensurePlatformSettingsIndexes(),
@@ -80,6 +82,11 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
     repository: createNotificationRepository(),
     authRepository: repository,
     emailService,
+    logger
+  });
+  const gamificationService = new GamificationService({
+    childService,
+    notificationService,
     logger
   });
   const testimonialService = new TestimonialService({
@@ -179,6 +186,7 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
     childService,
     gameLibraryService: databaseConnected ? gameLibraryService : null,
     learningPathService: databaseConnected ? learningPathService : null,
+    gamificationService: databaseConnected ? gamificationService : null,
     subscriptionService: databaseConnected ? subscriptionService : null,
     appointmentService: databaseConnected ? appointmentService : null
   });
@@ -199,6 +207,7 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
     gameService,
     gameLibraryService: databaseConnected ? gameLibraryService : null,
     learningPathService: databaseConnected ? learningPathService : null,
+    gamificationService: databaseConnected ? gamificationService : null,
     subscriptionService: databaseConnected ? subscriptionService : null,
     appointmentService: databaseConnected ? appointmentService : null,
     specialistDocumentService,

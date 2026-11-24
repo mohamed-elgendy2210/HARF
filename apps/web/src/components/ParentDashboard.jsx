@@ -120,6 +120,60 @@ function ProgressNotice({ children }) {
   return <div className="dashboard-empty-state">{children}</div>;
 }
 
+function summarizeProgressActivities(paths = []) {
+  const activities = paths.flatMap((path) => path.activities ?? []);
+  const completed = activities.filter(({ status }) => status === 'completed').length;
+  const skills = new Map();
+  for (const activity of activities) {
+    for (const skillId of activity.skillIds ?? []) {
+      const label = learningSkillLabels[skillId];
+      if (!label) continue;
+      const current = skills.get(skillId) ?? { id: skillId, label, activities: 0, completed: 0, attempts: 0 };
+      current.activities += 1;
+      current.attempts += activity.attemptCount ?? 0;
+      if (activity.status === 'completed') current.completed += 1;
+      skills.set(skillId, current);
+    }
+  }
+  return {
+    completed,
+    total: activities.length,
+    completionPercent: activities.length ? Math.round((completed / activities.length) * 100) : null,
+    skills: [...skills.values()]
+      .map((skill) => ({ ...skill, completionPercent: Math.round((skill.completed / skill.activities) * 100) }))
+      .sort((left, right) => right.completionPercent - left.completionPercent || left.label.localeCompare(right.label, 'ar'))
+  };
+}
+
+function getPerformanceChartPoints(buckets = []) {
+  const left = 64;
+  const right = 744;
+  const top = 24;
+  const bottom = 226;
+  return buckets.map((bucket, index) => ({
+    ...bucket,
+    x: buckets.length === 1 ? (left + right) / 2 : left + (index * (right - left)) / (buckets.length - 1),
+    y: bottom - (Math.max(0, Math.min(100, bucket.averageScore)) / 100) * (bottom - top)
+  }));
+}
+
+function performanceChartPath(points) {
+  if (points.length < 2) return '';
+  return points.slice(1).reduce((path, point, index) => {
+    const previous = points[index];
+    const delta = point.x - previous.x;
+    return `${path} C ${previous.x + delta / 3} ${previous.y}, ${previous.x + (delta * 2) / 3} ${point.y}, ${point.x} ${point.y}`;
+  }, `M ${points[0].x} ${points[0].y}`);
+}
+
+function formatPerformanceDate(value, period) {
+  return new Intl.DateTimeFormat('ar-EG', {
+    day: 'numeric',
+    month: 'short',
+    ...(period === 'weekly' ? { weekday: 'short' } : {})
+  }).format(new Date(value));
+}
+
 export default function ParentDashboard({
   user,
   onBack,
@@ -156,6 +210,14 @@ export default function ParentDashboard({
   const [loadingLearningProgress, setLoadingLearningProgress] = useState(false);
   const [learningProgressMessage, setLearningProgressMessage] = useState('');
   const [learningRefresh, setLearningRefresh] = useState(0);
+  const [learningJourney, setLearningJourney] = useState(null);
+  const [learningJourneyError, setLearningJourneyError] = useState('');
+  const [progressAnalytics, setProgressAnalytics] = useState(null);
+  const [progressPeriod, setProgressPeriod] = useState('weekly');
+  const [performanceGameId, setPerformanceGameId] = useState('');
+  const [loadingProgressAnalytics, setLoadingProgressAnalytics] = useState(false);
+  const [progressAnalyticsError, setProgressAnalyticsError] = useState('');
+  const [rewardSummary, setRewardSummary] = useState(null);
   const [learningSetup, setLearningSetup] = useState(null);
   const [learningSetupBusy, setLearningSetupBusy] = useState(false);
   const [subscription, setSubscription] = useState(null);
@@ -171,6 +233,7 @@ export default function ParentDashboard({
   const [loadingAvailability, setLoadingAvailability] = useState(false);
   const [loadingAppointments, setLoadingAppointments] = useState(false);
   const [appointments, setAppointments] = useState([]);
+  const [reportDateFilter, setReportDateFilter] = useState('');
   const [appointmentClock, setAppointmentClock] = useState(Date.now());
   const [busySpecialistNoShowId, setBusySpecialistNoShowId] = useState('');
   const [appointmentFilter, setAppointmentFilter] = useState('all');
@@ -300,7 +363,7 @@ export default function ParentDashboard({
     setLoadingAttempts(true);
     clearError();
     const query = new URLSearchParams({ page: String(attemptPage), limit: '10' });
-    if (gameFilter) query.set('gameId', gameFilter);
+    if (section === 'activity' && gameFilter) query.set('gameId', gameFilter);
     apiRequest(`/api/v1/children/${selectedChildId}/game-attempts?${query}`)
       .then((result) => {
         if (!active) return;
@@ -348,6 +411,70 @@ export default function ParentDashboard({
       active = false;
     };
   }, [selectedChildId, section, learningRefresh]);
+
+  useEffect(() => {
+    if (section !== 'progress' || !selectedChildId) {
+      setLearningJourney(null);
+      setRewardSummary(null);
+      setLearningJourneyError('');
+      return undefined;
+    }
+    let active = true;
+    setLearningJourney(null);
+    setRewardSummary(null);
+    setLearningJourneyError('');
+    Promise.all([
+      apiRequest(`/api/v1/children/${selectedChildId}/learning-journey`),
+      apiRequest(`/api/v1/children/${selectedChildId}/rewards`)
+    ]).then(([journey, rewards]) => {
+      if (!active) return;
+      setLearningJourney(journey);
+      setRewardSummary(rewards);
+    }).catch((requestError) => {
+      if (active) {
+        setLearningJourney(null);
+        setRewardSummary(null);
+        setLearningJourneyError(requestError.message || 'تعذر تحميل رحلة التعلّم والمكافآت.');
+      }
+    });
+    return () => { active = false; };
+  }, [selectedChildId, section, learningRefresh]);
+
+  useEffect(() => {
+    if (section !== 'progress' || !selectedChildId) {
+      setProgressAnalytics(null);
+      setProgressAnalyticsError('');
+      return undefined;
+    }
+    let active = true;
+    setLoadingProgressAnalytics(true);
+    setProgressAnalyticsError('');
+    setProgressAnalytics(null);
+    const query = new URLSearchParams({ period: progressPeriod });
+    if (performanceGameId) query.set('gameId', performanceGameId);
+    apiRequest(`/api/v1/children/${selectedChildId}/progress-analytics?${query}`)
+      .then(({ analytics }) => {
+        if (!active) return;
+        setProgressAnalytics(analytics);
+        const availableGames = analytics.games ?? [];
+        if (performanceGameId && !availableGames.some(({ gameId }) => gameId === performanceGameId)) {
+          setPerformanceGameId(availableGames[0]?.gameId ?? '');
+        } else if (!performanceGameId && availableGames.length > 0) {
+          setPerformanceGameId(availableGames[0].gameId);
+        }
+      })
+      .catch((requestError) => {
+        if (!active) return;
+        setProgressAnalytics(null);
+        setProgressAnalyticsError(requestError.message || 'تعذر تحميل بيانات الأداء.');
+      })
+      .finally(() => {
+        if (active) setLoadingProgressAnalytics(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedChildId, section, progressPeriod, performanceGameId]);
 
   useEffect(() => {
     if (section !== 'payments') return undefined;
@@ -1262,18 +1389,14 @@ export default function ParentDashboard({
               className="button button--small button--outline"
               disabled={attemptPage <= 1 || loadingAttempts}
               onClick={() => setAttemptPage((current) => Math.max(1, current - 1))}
-            >
-              السابق
-            </button>
+            >السابق</button>
             <span>صفحة {attemptPage}</span>
             <button
               type="button"
               className="button button--small button--outline"
               disabled={!hasMoreAttempts || loadingAttempts}
               onClick={() => setAttemptPage((current) => current + 1)}
-            >
-              التالي
-            </button>
+            >التالي</button>
           </div>
         </div>
       </>
@@ -1984,14 +2107,51 @@ export default function ParentDashboard({
     }
 
     if (section === 'progress') {
+      const progressSummary = summarizeProgressActivities(learningProgress?.paths);
+      const performancePoints = getPerformanceChartPoints(progressAnalytics?.buckets);
+      const performancePath = performanceChartPath(performancePoints);
+      const performanceArea = performancePoints.length > 1
+        ? `${performancePath} L ${performancePoints.at(-1).x} 226 L ${performancePoints[0].x} 226 Z`
+        : '';
+      const activitiesById = new Map((learningProgress?.paths ?? [])
+        .flatMap((path) => (path.activities ?? []).map((activity) => [
+          activity.gameId,
+          { ...activity, learningPathTitle: path.title }
+        ])));
+      const journeyGroups = [...(learningJourney?.levels ?? []).reduce((groups, level) => {
+        const pathLevels = groups.get(level.learningPathKey) ?? [];
+        pathLevels.push(level);
+        groups.set(level.learningPathKey, pathLevels);
+        return groups;
+      }, new Map()).entries()].map(([key, levels]) => ({
+        key,
+        title: levels[0]?.learningPathTitle ?? key,
+        levels: levels.sort((left, right) => left.sortOrder - right.sortOrder)
+      }));
+      const assignedActivities = (learningProgress?.paths ?? []).flatMap((path) => (
+        (path.activities ?? []).map((activity) => ({ ...activity, learningPathTitle: path.title }))
+      ));
+      const strongActivities = assignedActivities.filter((activity) => (
+        activity.status === 'completed' && activity.attemptCount > 0 && activity.recentAccuracyPercent !== null
+      ));
+      const practiceActivities = assignedActivities.filter((activity) => (
+        activity.status !== 'completed' && activity.attemptCount > 0
+      ));
       return selectedChild ? (
         <section className="dashboard-section">
           <div className="dashboard-section-heading">
             <div>
-              <h3>التقدم التعليمي · {selectedChild.displayName}</h3>
-              <p>البيانات أدناه تعرض المحاولات المسجلة فقط، ولا تمثل تشخيصًا طبيًا أو تقييمًا سريريًا.</p>
+              <h3>التقدم التعليمي</h3>
+              <p>ملخص رحلة {selectedChild.displayName} التعليمية من الأنشطة والمحاولات المسجلة.</p>
             </div>
             <div className="dashboard-section-heading__actions">
+              <label className="dashboard-progress-child-picker">ملف الطفل
+                <select value={selectedChildId} onChange={(event) => setSelectedChildId(event.target.value)}>
+                  {children.filter((child) => child.status === 'active').map((child) => (
+                    <option value={child.id} key={child.id}>{child.displayName}</option>
+                  ))}
+                </select>
+              </label>
               <button type="button" className="button button--small button--outline" onClick={() => selectSection('activity')}>كل الأنشطة</button>
               <button type="button" className="button button--small button--primary" disabled={learningSetupBusy || selectedChild.status !== 'active'} onClick={startLearningSetup}>
                 {learningSetupBusy ? 'جارٍ التحميل…' : 'تحديث بيانات وتقييم الطفل'}
@@ -2083,13 +2243,6 @@ export default function ParentDashboard({
               )}
             </form>
           )}
-          {attemptTotal > 0 && !loadingAttempts && (
-            <article className="dashboard-progress-summary">
-              <span>محاولات ألعاب مسجلة</span>
-              <strong>{attemptTotal}</strong>
-              <p>هذا عدد المحاولات المحفوظة في النظام، وليس مقياسًا لمستوى الطفل.</p>
-            </article>
-          )}
           {loadingLearningProgress ? (
             <p className="dashboard-loading" role="status">جارٍ تحميل مسار التعلّم…</p>
           ) : learningProgressMessage ? (
@@ -2097,52 +2250,276 @@ export default function ParentDashboard({
           ) : learningProgress ? (
             <>
               <p className="dashboard-privacy-note">{learningProgress.note}</p>
+              <section className="dashboard-progress-analytics" aria-label="ملخص التقدم التعليمي">
+                <div className="dashboard-progress-metrics">
+                  <article className="dashboard-progress-metric dashboard-progress-metric--teal">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">◷</span>
+                    <div><small>محاولات الألعاب المسجلة</small>
+                      <strong>{loadingAttempts ? '…' : attemptTotal}</strong>
+                      <p>إجمالي محاولات هذا الطفل</p>
+                    </div>
+                  </article>
+                  <article className="dashboard-progress-metric dashboard-progress-metric--purple">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">✦</span>
+                    <div><small>إجمالي النجوم المكتسبة</small>
+                      <strong>{rewardSummary ? rewardSummary.totalStars : '—'}</strong>
+                      <p>مكافآت تشجيعية وليست مقياسًا للتعلّم</p>
+                    </div>
+                  </article>
+                  <article className="dashboard-progress-metric dashboard-progress-metric--orange">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">✓</span>
+                    <div><small>أنشطة تعليمية مكتملة</small>
+                      <strong>{progressSummary.total ? progressSummary.completed : '—'}</strong>
+                      <p>{progressSummary.total ? `من ${progressSummary.total} نشاطًا معينًا` : 'لا توجد أنشطة معينة'}</p>
+                    </div>
+                  </article>
+                  <article className="dashboard-progress-metric dashboard-progress-metric--sky">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">▦</span>
+                    <div><small>أيام تعلّم نشطة</small>
+                      <strong>{loadingProgressAnalytics ? '…' : progressAnalyticsError ? '—' : progressAnalytics?.activeDays ?? '—'}</strong>
+                      <p>خلال {progressPeriod === 'weekly' ? 'آخر ٧ أيام' : 'آخر ٣٠ يومًا'}</p>
+                    </div>
+                  </article>
+                </div>
+
+                <div className="dashboard-progress-charts">
+                  <section className="dashboard-progress-chart-card" aria-labelledby="progress-skills-title">
+                    <div className="dashboard-progress-chart-heading">
+                      <div><h4 id="progress-skills-title">الأنشطة المرتبطة بالمهارات</h4>
+                        <p>نسبة الأنشطة المكتملة لكل مهارة ضمن المسارات الحالية.</p></div>
+                    </div>
+                    {progressSummary.skills.length ? (
+                      <div className="dashboard-skill-bars">
+                        {progressSummary.skills.map((skill, index) => (
+                          <div className="dashboard-skill-bar" key={skill.id}
+                            title={`${skill.completed} من ${skill.activities} أنشطة مكتملة · ${skill.attempts} محاولة مسجلة`}>
+                            <div className="dashboard-skill-bar__label">
+                              <strong>{skill.label}</strong><span>{skill.completionPercent}٪</span>
+                            </div>
+                            <div className="dashboard-skill-bar__track" role="progressbar"
+                              aria-label={`${skill.label}: الأنشطة المكتملة`}
+                              aria-valuemin="0" aria-valuemax="100" aria-valuenow={skill.completionPercent}
+                              aria-valuetext={`${skill.completed} من ${skill.activities} أنشطة مكتملة`}>
+                              <span style={{ width: `${skill.completionPercent}%`, '--skill-color': ['#2aa89b', '#8474cf', '#65a9dc', '#e6a14a', '#5d83ca', '#cf7ea1'][index % 6] }} />
+                            </div>
+                            <small>{skill.completed} من {skill.activities} أنشطة مكتملة · {skill.attempts} محاولة مسجلة</small>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <ProgressNotice>لا تتوفر مهارات مرتبطة بالأنشطة المعينة لهذا الطفل حتى الآن.</ProgressNotice>
+                    )}
+                    <p className="dashboard-privacy-note">هذا ملخص لإنجاز الأنشطة المرتبطة، ولا يثبت تحسنًا لغويًا أو تشخيصيًا.</p>
+                  </section>
+
+                  <section className="dashboard-progress-chart-card" aria-labelledby="progress-performance-title">
+                    <div className="dashboard-progress-chart-heading">
+                      <div><h4 id="progress-performance-title">الأداء الفعلي عبر المحاولات</h4>
+                        <p>كل خط يعرض لعبة واحدة فقط لتجنّب خلط أنظمة التقييم المختلفة.</p></div>
+                      <div className="dashboard-performance-controls">
+                        <label className="dashboard-performance-game-picker">اللعبة
+                          <select value={performanceGameId} onChange={(event) => setPerformanceGameId(event.target.value)}
+                            disabled={!progressAnalytics?.games?.length}>
+                            {!performanceGameId && <option value="">اختر لعبة</option>}
+                            {(progressAnalytics?.games ?? []).map(({ gameId }) => (
+                              <option value={gameId} key={gameId}>
+                                {activitiesById.get(gameId)?.title ?? gameNames[gameId] ?? gameId}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="dashboard-period-filter" aria-label="الفترة الزمنية">
+                          <button type="button" aria-pressed={progressPeriod === 'weekly'}
+                            onClick={() => setProgressPeriod('weekly')}>أسبوع</button>
+                          <button type="button" aria-pressed={progressPeriod === 'monthly'}
+                            onClick={() => setProgressPeriod('monthly')}>شهر</button>
+                        </div>
+                      </div>
+                    </div>
+                    {loadingProgressAnalytics ? (
+                      <p className="dashboard-loading" role="status">جارٍ تحميل المحاولات المحفوظة…</p>
+                    ) : progressAnalyticsError ? (
+                      <ProgressNotice>{progressAnalyticsError}</ProgressNotice>
+                    ) : performancePoints.length ? (
+                      <>
+                        <div className="dashboard-performance-chart-wrap">
+                          <svg className="dashboard-performance-chart" viewBox="0 0 760 280"
+                            role="img" aria-label={`متوسط نتائج المحاولات المسجلة خلال ${progressPeriod === 'weekly' ? 'الأسبوع' : 'الشهر'}`}>
+                            {[0, 25, 50, 75, 100].map((value) => {
+                              const y = 226 - (value / 100) * 202;
+                              return <g key={value}>
+                                <line x1="64" x2="744" y1={y} y2={y} className="dashboard-performance-chart__grid" />
+                                <text x="50" y={y + 4} textAnchor="end" className="dashboard-performance-chart__axis-label">{value}٪</text>
+                              </g>;
+                            })}
+                            {performanceArea && <path d={performanceArea} className="dashboard-performance-chart__area" />}
+                            {performancePath && <path d={performancePath} className="dashboard-performance-chart__line" />}
+                            {performancePoints.map((point) => (
+                              <g key={point.date}>
+                                <circle cx={point.x} cy={point.y} r="6" className="dashboard-performance-chart__point">
+                                  <title>{`${new Intl.DateTimeFormat('ar-EG', { dateStyle: 'long' }).format(new Date(point.date))}: ${point.averageScore}٪ متوسط من ${point.attempts} محاولة`}</title>
+                                </circle>
+                                <text x={point.x} y="257" textAnchor="middle" className="dashboard-performance-chart__date">
+                                  {formatPerformanceDate(point.date, progressPeriod)}
+                                </text>
+                              </g>
+                            ))}
+                          </svg>
+                        </div>
+                        <p className="dashboard-privacy-note">المتوسط محسوب من نتائج المحاولات المحفوظة فعلًا، وهو وصف للنشاط وليس تقييمًا لقدرات الطفل.</p>
+                      </>
+                    ) : (
+                      <ProgressNotice>{progressAnalytics?.games?.length
+                        ? 'لا توجد محاولات محفوظة لهذه اللعبة في الفترة المحددة.'
+                        : 'لا توجد محاولات محفوظة في هذه الفترة. ستظهر نتائج اللعبة هنا بعد تسجيل محاولات جديدة.'}</ProgressNotice>
+                    )}
+                  </section>
+                </div>
+              </section>
+              {learningJourneyError && <ProgressNotice>{learningJourneyError}</ProgressNotice>}
+              {learningJourney && (
+                <section className="dashboard-learning-journey" aria-label="رحلة التعلّم">
+                  <div className="dashboard-learning-journey__heading">
+                    <div><h4>رحلة التعلّم</h4>
+                      <p>مستويات وأنشطة المسارات المعينة، مع إظهار المكافآت التي سُجلت فعلًا.</p></div>
+                    <span className="dashboard-learning-journey__stars">✦ {rewardSummary?.totalStars ?? '—'} نجمة</span>
+                  </div>
+                  {journeyGroups.length ? journeyGroups.map((journey) => {
+                    const completedCount = journey.levels.filter(({ status }) => status === 'completed').length;
+                    const currentLevel = journey.levels.find(({ status }) => status === 'in-progress')
+                      ?? journey.levels.find(({ status }) => status === 'available');
+                    return (
+                      <article className="dashboard-journey-path" key={journey.key}>
+                        <div className="dashboard-journey-path__heading">
+                          <div><h5>{journey.title}</h5>
+                            <span>{completedCount} من {journey.levels.length} مستويات مكتملة
+                              {currentLevel ? ` · المستوى الحالي: ${currentLevel.title}` : ''}
+                            </span></div>
+                        </div>
+                        <div className="dashboard-journey-levels">
+                          {journey.levels.map((level) => {
+                            const isCurrent = currentLevel?.id === level.id;
+                            const statusLabel = level.status === 'completed' ? 'مكتمل'
+                              : isCurrent ? 'المستوى الحالي'
+                                : level.status === 'locked' ? 'قادم ومقفل' : 'متاح';
+                            return (
+                              <article className={`dashboard-journey-level is-${level.status}${isCurrent ? ' is-current' : ''}`}
+                                key={level.id}>
+                                <div className="dashboard-journey-level__top">
+                                  <span className="dashboard-journey-level__marker" aria-hidden="true">
+                                    {level.status === 'completed' ? '✓' : level.status === 'locked' ? '·' : level.sortOrder + 1}
+                                  </span>
+                                  <small>{statusLabel}</small>
+                                </div>
+                                <strong>{level.title}</strong>
+                                {level.status !== 'locked' && (
+                                  <div className="dashboard-journey-level__progress">
+                                    <div role="progressbar" aria-label={`إكمال ${level.title}`}
+                                      aria-valuemin="0" aria-valuemax="100"
+                                      aria-valuenow={level.completionPercent}
+                                      aria-valuetext={`${level.completionPercent}% مكتمل`}>
+                                      <span style={{ width: `${level.completionPercent}%` }} />
+                                    </div>
+                                    <small>{level.completionPercent}% · {level.completedGameIds.length} ألعاب مكتملة
+                                      {level.status !== 'completed' ? ` · ${level.remainingRequiredGames} مطلوبة` : ''}
+                                    </small>
+                                  </div>
+                                )}
+                                {level.status === 'completed' && level.completedAt && (
+                                  <time dateTime={level.completedAt}>{formatDate(level.completedAt)}</time>
+                                )}
+                                {level.earnedRewards?.length > 0 && (
+                                  <div className="dashboard-journey-level__rewards">
+                                    {level.earnedRewards.map((reward, index) => (
+                                      <span key={`${level.id}-${reward.type}-${reward.awardedAt}-${index}`}>
+                                        {reward.type === 'stars' ? `✦ ${reward.quantity} نجمة` : reward.name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </article>
+                    );
+                  }) : (
+                    <ProgressNotice>لا توجد مستويات منشورة ضمن المسارات المعينة حاليًا.</ProgressNotice>
+                  )}
+                  <p className="dashboard-privacy-note">النجوم والشارات والهدايا مكافآت تفاعلية، وليست قياسًا لتطور اللغة أو القدرات.</p>
+                </section>
+              )}
               {learningProgress.paths.length === 0 ? (
                 <ProgressNotice>لم تُعيّن مسارات لهذا الطفل بعد. ابدأ بإعداد الاستبيان لرؤية توصيات مناسبة.</ProgressNotice>
               ) : learningProgress.paths.map((path) => (
-                <section className="dashboard-learning-path-card" key={path.key}>
-                  <article className="dashboard-progress-summary">
-                    <span>{path.title} · {path.assignmentType === 'primary'
-                      ? 'مسار أساسي'
-                      : path.assignmentType === 'complementary' ? 'مسار تكميلي' : 'مسار سابق'}</span>
-                    <strong>{path.summary.completedActivities} من {path.summary.totalActivities}</strong>
-                    <p>{path.description}</p>
-                    {path.assignmentReason && <small>سبب التوصية: {path.assignmentReason}</small>}
-                    {path.status === 'paused' && <small>هذا المسار متوقف مؤقتًا.</small>}
-                  </article>
-                  <div className="dashboard-learning-activities">
-                    {path.activities.map((activity) => (
-                      <article className="dashboard-attempt" key={activity.gameId}>
-                        <div>
-                          <h4>{activity.title}</h4>
-                          <span>{activity.learningArea} · {activity.status === 'completed'
-                            ? 'مكتمل'
-                            : activity.status === 'available' ? 'متاح الآن' : 'قادم'}</span>
-                        </div>
-                        <p>{activity.suggestionReason ?? activity.description}</p>
-                        {activity.attemptCount > 0 && (
-                          <small>محاولات مسجلة: {activity.attemptCount}
-                            {activity.recentAccuracyPercent !== null
-                              ? ` · الدقة في أحدث المحاولات: ${activity.recentAccuracyPercent}%`
-                              : ''}
-                          </small>
-                        )}
-                        {['active', 'completed'].includes(path.status) && activity.status !== 'upcoming' && (
-                          <a className="button button--small button--outline" href={`/games/${encodeURIComponent(activity.gameId)}?childId=${encodeURIComponent(selectedChild.id)}`}>
-                            {activity.status === 'completed' ? 'تكرار النشاط' : 'ابدأ النشاط'}
-                          </a>
-                        )}
-                      </article>
-                    ))}
+                <section className="dashboard-assigned-path" key={path.key}>
+                  <div className="dashboard-assigned-path__summary">
+                    <div><span>{path.assignmentType === 'primary' ? 'المسار الأساسي' : path.assignmentType === 'complementary' ? 'مسار تكميلي' : 'مسار سابق'}</span>
+                      <h4>{path.title}</h4>
+                      <p>{path.description}</p>
+                    </div>
+                    <strong>{path.summary.completedActivities}<small> / {path.summary.totalActivities} نشاط</small></strong>
                   </div>
+                  <details className="dashboard-assigned-path__details">
+                    <summary>تفاصيل أنشطة المسار</summary>
+                    <div className="dashboard-learning-activities">
+                      {path.activities.map((activity) => (
+                        <article className="dashboard-attempt" key={activity.gameId}>
+                          <div>
+                            <h4>{activity.title}</h4>
+                            <span>{activity.learningArea} · {activity.status === 'completed'
+                              ? 'مكتمل'
+                              : activity.status === 'available' ? 'متاح الآن' : 'قادم'}</span>
+                          </div>
+                          <p>{activity.suggestionReason ?? activity.description}</p>
+                          {activity.attemptCount > 0 && (
+                            <small>محاولات مسجلة: {activity.attemptCount}
+                              {activity.recentAccuracyPercent !== null
+                                ? ` · الدقة في أحدث المحاولات: ${activity.recentAccuracyPercent}%`
+                                : ''}
+                            </small>
+                          )}
+                          {['active', 'completed'].includes(path.status) && activity.status !== 'upcoming' && (
+                            <a className="button button--small button--outline" href={`/games/${encodeURIComponent(activity.gameId)}?childId=${encodeURIComponent(selectedChild.id)}`}>
+                              {activity.status === 'completed' ? 'تكرار النشاط' : 'ابدأ النشاط'}
+                            </a>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </details>
                 </section>
               ))}
             </>
           ) : (
             <ProgressNotice>لا يوجد مسار تعلّم منشور حاليًا.</ProgressNotice>
           )}
-          <h4 className="dashboard-subheading">أحدث الأنشطة المسجلة</h4>
-          {renderAttemptList()}
+          {learningProgress && !learningProgressMessage && (
+            <section className="dashboard-practice-recommendations" aria-label="أنشطة للمراجعة">
+              <article className="dashboard-practice-card dashboard-practice-card--strength">
+                <div><span aria-hidden="true">✦</span><div><h4>أنشطة حققت معيار المسار</h4>
+                  <p>إنجازات مسجلة وفق معايير المسارات، وليست حكمًا سريريًا على قدرات الطفل.</p></div></div>
+                {strongActivities.length ? strongActivities.slice(0, 3).map((activity, index) => (
+                  <div className="dashboard-practice-item" key={`strength-${activity.gameId}-${activity.learningPathTitle}-${index}`}>
+                    <strong>{activity.title}</strong><small>{activity.learningPathTitle} · {activity.attemptCount} محاولات مسجلة</small>
+                    <span>أحدث دقة مسجلة في هذا النشاط: {activity.recentAccuracyPercent}%</span>
+                  </div>
+                )) : <ProgressNotice>ستظهر هنا الأنشطة التي أُكمل معيارها بناءً على المحاولات المسجلة.</ProgressNotice>}
+              </article>
+              <article className="dashboard-practice-card dashboard-practice-card--practice">
+                <div><span aria-hidden="true">↗</span><div><h4>أنشطة قد تستفيد من ممارسة إضافية</h4>
+                  <p>اقتراحات مشجعة للأنشطة التي لديها محاولات مسجلة ولم يكتمل معيارها بعد.</p></div></div>
+                {practiceActivities.length ? practiceActivities.slice(0, 3).map((activity, index) => (
+                  <div className="dashboard-practice-item" key={`practice-${activity.gameId}-${activity.learningPathTitle}-${index}`}>
+                    <strong>{activity.title}</strong><small>{activity.learningPathTitle} · {activity.attemptCount} محاولات مسجلة</small>
+                    {activity.recentAccuracyPercent !== null && (
+                      <span>أحدث دقة مسجلة في هذا النشاط: {activity.recentAccuracyPercent}%</span>
+                    )}
+                  </div>
+                )) : <ProgressNotice>لا توجد أنشطة غير مكتملة لها محاولات مسجلة حاليًا.</ProgressNotice>}
+              </article>
+            </section>
+          )}
         </section>
       ) : <ProgressNotice>اختر ملف طفل لعرض تقدمه.</ProgressNotice>;
     }
@@ -2179,11 +2556,28 @@ export default function ParentDashboard({
     if (section === 'reports') {
       if (!selectedChild) return <ProgressNotice>اختر ملف طفل لإدارة التقارير.</ProgressNotice>;
       const childReports = appointments.filter((appointment) => (
-        appointment.childId === selectedChild.id && appointment.parentProgressReport
+        appointment.childId === selectedChild.id
+        && appointment.parentProgressReport?.status === 'published'
+        && (!reportDateFilter || new Intl.DateTimeFormat('en-CA', {
+          timeZone: appointment.timeZone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(new Date(appointment.startsAt)) === reportDateFilter)
       ));
       return (
         <section className="dashboard-section">
-          <h3>تقارير التقدم · {selectedChild.displayName}</h3>
+          <div className="dashboard-section-heading">
+            <div>
+              <h3>تقارير الجلسات · {selectedChild.displayName}</h3>
+              <p>تقارير الجلسات المنشورة من الأخصائيين.</p>
+            </div>
+            <label className="dashboard-session-reports__date-filter">
+              تصفية بتاريخ الجلسة
+              <input type="date" value={reportDateFilter}
+                onChange={(event) => setReportDateFilter(event.target.value)} />
+            </label>
+          </div>
           {!currentConsent('progress_reports') && (
             <div className="dashboard-consent-prompt">
               <p>لم تمنح موافقة إعداد تقارير التقدم لهذا الملف. يمكنك مراجعة الموافقات من صفحة الملف الشخصي.</p>
@@ -2195,18 +2589,48 @@ export default function ParentDashboard({
             : loadingAppointments
               ? <p className="dashboard-loading" role="status">جارٍ تحميل التقارير…</p>
               : childReports.length === 0
-                ? <ProgressNotice>لا يوجد تقرير أخصائي محفوظ لهذا الملف حتى الآن.</ProgressNotice>
-                : <div className="specialist-appointment-list">
-                  {childReports.map((appointment) => (
-                    <article className="specialist-appointment-card" key={appointment.id}>
-                      <h4>{displayNameOrFallback(appointment.specialistName)} · {formatDate(appointment.parentProgressReport.createdAt)}</h4>
-                      <p>{appointment.parentProgressReport.summary}</p>
-                      {appointment.parentProgressReport.suggestedActivities?.length > 0 && (
-                        <ul>{appointment.parentProgressReport.suggestedActivities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
-                      )}
-                      <small>ملخص تعليمي لا يمثل تشخيصًا طبيًا.</small>
-                    </article>
-                  ))}
+                ? <ProgressNotice>{reportDateFilter
+                  ? 'لا توجد تقارير منشورة في هذا التاريخ.'
+                  : 'لا يوجد تقرير أخصائي منشور لهذا الملف حتى الآن.'}</ProgressNotice>
+                : <div className="dashboard-session-reports">
+                  {childReports.map((appointment) => {
+                    const report = appointment.parentProgressReport;
+                    const reportSections = [
+                      ['ملخص الجلسة', report.sessionSummary || report.summary],
+                      ['أهداف الجلسة', report.sessionGoals],
+                      ['الأنشطة المنفذة', report.activitiesPerformed],
+                      ['ملاحظات الأخصائي', report.specialistObservations],
+                      ['الإنجازات الإيجابية', report.positiveAchievements],
+                      ['نقاط تحتاج إلى تدريب إضافي', report.furtherPractice],
+                      ['توصيات لولي الأمر', report.parentRecommendations],
+                      ['خطة الجلسة القادمة', report.nextSessionPlan]
+                    ];
+                    return (
+                      <article className="dashboard-session-report" key={appointment.id}>
+                        <div className="dashboard-session-report__meta">
+                          <h4>{appointment.childName || selectedChild.displayName}</h4>
+                          <span className="dashboard-session-report__status">منشور</span>
+                        </div>
+                        <p>الأخصائي: {displayNameOrFallback(appointment.specialistName)}</p>
+                        <p>تاريخ الجلسة: {formatDate(appointment.startsAt)}</p>
+                        <p>تاريخ النشر: {formatDate(report.publishedAt ?? report.createdAt)}</p>
+                        <details className="dashboard-session-report__details">
+                          <summary>عرض التقرير الكامل</summary>
+                          <div className="dashboard-session-report__content">
+                            {reportSections.map(([title, content]) => content
+                              ? <section key={title}><h5>{title}</h5><p>{content}</p></section>
+                              : <section key={title}><h5>{title}</h5><p>لم يضف الأخصائي تفاصيل لهذا القسم.</p></section>)}
+                            {report.suggestedActivities?.length > 0 && (
+                              <section><h5>أنشطة مقترحة</h5>
+                                <ul>{report.suggestedActivities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+                              </section>
+                            )}
+                            <small>هذا التقرير تعليمي ولا يمثل تشخيصًا طبيًا.</small>
+                          </div>
+                        </details>
+                      </article>
+                    );
+                  })}
                 </div>}
         </section>
       );

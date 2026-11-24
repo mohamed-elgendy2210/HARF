@@ -14,7 +14,8 @@ export function createGamesRouter({
   authenticationMiddleware,
   databaseMiddleware,
   subscriptionService,
-  learningPathService
+  learningPathService,
+  gamificationService
 }) {
   const router = Router();
 
@@ -66,6 +67,13 @@ export function createGamesRouter({
                       learningPathService.assertActivityConfigured(game.id),
                       childId
                         ? learningPathService.assertActivityPlayable(
+                          request.authenticated.user._id,
+                          childId,
+                          game.id
+                        )
+                        : Promise.resolve(),
+                      childId
+                        ? gamificationService?.assertActivityPlayable(
                           request.authenticated.user._id,
                           childId,
                           game.id

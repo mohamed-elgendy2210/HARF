@@ -26,6 +26,19 @@ import {
   questionnaireSchema,
 } from '../validation/learningPath.js';
 import {
+  gamificationChildParamsSchema,
+  gamificationSettingsSchema,
+  learningLevelSchema,
+  learningPathLevelsQuerySchema,
+  levelIdSchema,
+  levelOrderSchema,
+  rewardDefinitionSchema,
+  rewardHistoryQuerySchema,
+  rewardIdSchema,
+  childSearchQuerySchema
+} from '../validation/gamification.js';
+import { gameInteractionSchema } from '../validation/games.js';
+import {
   paymentDecisionSchema,
   paymentRequestParamsSchema,
   adminSessionPaymentQuerySchema,
@@ -107,8 +120,10 @@ export function createAdminRouter({
   authService,
   authenticationMiddleware,
   childService,
+  gameService,
   gameLibraryService,
   learningPathService,
+  gamificationService,
   subscriptionService,
   reportService,
   notificationService,
@@ -129,6 +144,84 @@ export function createAdminRouter({
     requireCsrf,
     requireAdminRequestPermission
   );
+
+  if (gamificationService) {
+    router.get('/learning-levels', validate(learningPathLevelsQuerySchema, 'query'), async (request, response) => {
+      const levels = await gamificationService.listAdminLevels(request.validatedQuery.pathKey ?? '');
+      response.json({ levels });
+    });
+    router.post('/learning-levels', validate(learningLevelSchema), async (request, response) => {
+      const level = await gamificationService.createOrUpdateLevel(
+        request.authenticated.user,
+        request.body
+      );
+      response.status(201).json({ level });
+    });
+    router.put('/learning-levels/:levelId', validate(levelIdSchema, 'params'), validate(learningLevelSchema), async (request, response) => {
+      const level = await gamificationService.createOrUpdateLevel(
+        request.authenticated.user,
+        request.body,
+        request.params.levelId
+      );
+      response.json({ level });
+    });
+    router.patch('/learning-paths/:pathKey/learning-levels/reorder', validate(learningPathParamsSchema, 'params'), validate(levelOrderSchema), async (request, response) => {
+      await gamificationService.reorderLevels(
+        request.authenticated.user,
+        request.params.pathKey,
+        request.body.orderedIds
+      );
+      response.json({ reordered: true });
+    });
+    router.delete('/learning-levels/:levelId', validate(levelIdSchema, 'params'), async (request, response) => {
+      await gamificationService.deleteLevel(request.params.levelId);
+      response.status(204).end();
+    });
+    router.get('/gamification-settings', async (_request, response) => {
+      response.json({ settings: await gamificationService.getGamificationSettings() });
+    });
+    router.put('/gamification-settings', validate(gamificationSettingsSchema), async (request, response) => {
+      response.json({
+        settings: await gamificationService.updateGamificationSettings(
+          request.authenticated.user,
+          request.body
+        )
+      });
+    });
+    router.get('/rewards', async (_request, response) => {
+      response.json({ rewards: await gamificationService.listDefinitions() });
+    });
+    router.post('/rewards', validate(rewardDefinitionSchema), async (request, response) => {
+      const reward = await gamificationService.createOrUpdateDefinition(
+        request.authenticated.user,
+        request.body
+      );
+      response.status(201).json({ reward });
+    });
+    router.put('/rewards/:rewardId', validate(rewardIdSchema, 'params'), validate(rewardDefinitionSchema), async (request, response) => {
+      const reward = await gamificationService.createOrUpdateDefinition(
+        request.authenticated.user,
+        request.body,
+        request.params.rewardId
+      );
+      response.json({ reward });
+    });
+    router.delete('/rewards/:rewardId', validate(rewardIdSchema, 'params'), async (request, response) => {
+      await gamificationService.deleteDefinition(request.params.rewardId);
+      response.status(204).end();
+    });
+    router.get('/gamification-children', validate(childSearchQuerySchema, 'query'), async (request, response) => {
+      response.json({ children: await gamificationService.searchChildren(request.validatedQuery.q) });
+    });
+    router.get('/gamification-children/:childId/rewards', validate(gamificationChildParamsSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json(await gamificationService.getAdminChildRewards(request.params.childId));
+    });
+    router.get('/reward-transactions', validate(rewardHistoryQuerySchema, 'query'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json(await gamificationService.listRewardHistory(request.validatedQuery));
+    });
+  }
 
   router.get('/roles', async (_request, response) => {
     response.json({
@@ -481,6 +574,17 @@ export function createAdminRouter({
       const game = await gameLibraryService.unpublish(request.authenticated.user, request.params.gameId);
       response.json({ game });
     });
+
+    if (gameService) {
+      router.get('/games/:gameId/preview', validate(gameLibraryParamsSchema, 'params'), async (request, response) => {
+        response.json({ game: await gameLibraryService.getDraftPreview(request.params.gameId) });
+      });
+      router.post('/games/:gameId/preview/answer', validate(gameLibraryParamsSchema, 'params'), validate(gameInteractionSchema), async (request, response) => {
+        response.json({
+          answer: await gameService.checkPreviewAnswer(request.params.gameId, request.body)
+        });
+      });
+    }
 
     router.put('/games/trials', validate(trialGamesSchema), async (request, response) => {
       await gameLibraryService.validateTrialGames(request.body.gameIds);

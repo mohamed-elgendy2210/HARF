@@ -31,6 +31,24 @@ const sessionStatuses = {
   specialist_no_show: 'أبلغ ولي الأمر عن عدم حضور الأخصائي'
 };
 const APPOINTMENTS_PER_PAGE = 6;
+const sessionReportFields = [
+  { key: 'sessionSummary', label: 'ملخص الجلسة', rows: 4 },
+  { key: 'sessionGoals', label: 'أهداف الجلسة', rows: 3 },
+  { key: 'activitiesPerformed', label: 'الأنشطة المنفذة', rows: 3 },
+  { key: 'specialistObservations', label: 'ملاحظات الأخصائي', rows: 3 },
+  { key: 'positiveAchievements', label: 'الإنجازات الإيجابية', rows: 3 },
+  { key: 'furtherPractice', label: 'نقاط تحتاج إلى تدريب إضافي', rows: 3 },
+  { key: 'parentRecommendations', label: 'توصيات لولي الأمر', rows: 3 },
+  { key: 'nextSessionPlan', label: 'خطة الجلسة القادمة', rows: 3 }
+];
+
+function blankSessionReport(report = {}) {
+  return Object.fromEntries(sessionReportFields.map(({ key }) => [key, report[key] ?? '']));
+}
+
+function isPublishedSessionReport(report) {
+  return report?.status === 'published' || Boolean(report?.createdAt && !report.status);
+}
 
 function blankSchedule() {
   return {
@@ -70,6 +88,9 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   ));
   const [form, setForm] = useState(blankSchedule);
   const [appointments, setAppointments] = useState([]);
+  const [selectedLearningChildId, setSelectedLearningChildId] = useState('');
+  const [specialistJourney, setSpecialistJourney] = useState(null);
+  const [loadingSpecialistJourney, setLoadingSpecialistJourney] = useState(false);
   const [appointmentClock, setAppointmentClock] = useState(Date.now());
   const [visibleAppointmentCount, setVisibleAppointmentCount] = useState(APPOINTMENTS_PER_PAGE);
   const [meetingAppointment, setMeetingAppointment] = useState(null);
@@ -78,6 +99,10 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   const [documentsSaving, setDocumentsSaving] = useState(false);
   const [busyAppointmentId, setBusyAppointmentId] = useState('');
   const [busySessionId, setBusySessionId] = useState('');
+  const [reportAppointmentId, setReportAppointmentId] = useState('');
+  const [sessionReportDraft, setSessionReportDraft] = useState(blankSessionReport);
+  const [reportPreview, setReportPreview] = useState(false);
+  const [busyReportId, setBusyReportId] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [exceptionDate, setExceptionDate] = useState('');
@@ -122,6 +147,20 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (section !== 'learning' || !selectedLearningChildId) {
+      setSpecialistJourney(null);
+      return undefined;
+    }
+    let active = true;
+    setLoadingSpecialistJourney(true);
+    apiRequest(`/api/v1/specialist/children/${selectedLearningChildId}/learning-journey`)
+      .then((journey) => { if (active) setSpecialistJourney(journey); })
+      .catch((requestError) => { if (active) setError(requestError.message); })
+      .finally(() => { if (active) setLoadingSpecialistJourney(false); });
+    return () => { active = false; };
+  }, [section, selectedLearningChildId]);
 
   useEffect(() => {
     if (section !== 'appointments') return;
@@ -236,12 +275,7 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
     if (action === 'complete') {
       const privateNotes = window.prompt('ملاحظات مهنية خاصة بالأخصائي (لا يراها ولي الأمر):', '');
       if (privateNotes === null) return false;
-      const summary = window.prompt('ملخص تعليمي اختياري لولي الأمر (يتطلب موافقة التقارير):', '');
-      if (summary === null) return false;
-      body = {
-        privateNotes,
-        ...(summary.trim() ? { parentReport: { summary: summary.trim(), suggestedActivities: [] } } : {})
-      };
+      body = { privateNotes };
     }
     setBusySessionId(appointment.id);
     setError('');
@@ -255,7 +289,7 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
       setNotice(action === 'start'
         ? 'بدأت الجلسة وتم تسجيل وقت البدء.'
         : action === 'complete'
-          ? 'انتهت الجلسة وحُفظ الملخص التعليمي لولي الأمر.'
+          ? 'انتهت الجلسة. يمكنك الآن إعداد تقريرها ومراجعته قبل نشره.'
           : 'تم تسجيل عدم حضور الطفل للموعد.');
       await loadData();
       return true;
@@ -268,11 +302,84 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
     }
   };
 
+  const openSessionReport = (appointment) => {
+    setReportAppointmentId(appointment.id);
+    setSessionReportDraft(blankSessionReport(appointment.parentProgressReport));
+    setReportPreview(false);
+    setError('');
+    setNotice('');
+  };
+
+  const saveSessionReport = async (appointment, publish = false) => {
+    if (publish && !sessionReportDraft.sessionSummary.trim()) {
+      setError('اكتب ملخص الجلسة قبل نشر التقرير.');
+      return;
+    }
+    if (publish && !window.confirm('سيظهر التقرير لولي الأمر في صفحة التقارير. هل تريد نشره؟')) return;
+    setBusyReportId(appointment.id);
+    setError('');
+    setNotice('');
+    try {
+      const { appointment: savedDraft } = await apiRequest(`/api/v1/appointments/${appointment.id}/session-report`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sessionReportDraft)
+      });
+      setAppointments((current) => current.map((item) => item.id === savedDraft.id ? savedDraft : item));
+      if (publish) {
+        const { appointment: published } = await apiRequest(
+          `/api/v1/appointments/${appointment.id}/session-report/publish`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }
+        );
+        setAppointments((current) => current.map((item) => item.id === published.id ? published : item));
+        setReportAppointmentId('');
+        setNotice('تم نشر تقرير الجلسة وإتاحته لولي الأمر.');
+      } else {
+        setNotice('تم حفظ مسودة التقرير. لن تظهر لولي الأمر حتى تنشرها.');
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+      if (requestError.status === 401) onReauthenticate();
+    } finally {
+      setBusyReportId('');
+    }
+  };
+
   const pendingCount = appointments.filter(({ status }) => status === 'pending').length;
+  const assignedChildren = [...new Map(appointments
+    .filter(({ status, childId }) => status === 'accepted' && childId)
+    .map((appointment) => [appointment.childId, {
+      id: appointment.childId,
+      name: appointment.childName || 'ملف طفل'
+    }])).values()];
   const orderedAppointments = useMemo(() => [...appointments].sort(
     (first, second) => appointmentRequestTimestamp(second) - appointmentRequestTimestamp(first)
   ), [appointments]);
   const approvedProfile = user.approvalStatus === 'approved' && user.emailVerified && user.accountStatus === 'active';
+  const journeyLevels = specialistJourney?.levels ?? [];
+  const journeyAttempts = specialistJourney?.attempts ?? [];
+  const completedLevels = journeyLevels.filter(({ status }) => status === 'completed').length;
+  const completedActivities = journeyLevels.reduce((total, level) => total + level.completedGameIds.length, 0);
+  const totalLevelActivities = journeyLevels.reduce((total, level) => total + level.gameIds.length, 0);
+  const remainingRequiredGames = journeyLevels
+    .filter(({ status }) => status !== 'locked')
+    .reduce((total, level) => total + level.remainingRequiredGames, 0);
+  const earnedBadges = specialistJourney?.rewards.badges.filter(({ earned }) => earned) ?? [];
+  const earnedGifts = specialistJourney?.rewards.gifts.filter(({ earned }) => earned) ?? [];
+  const journeyAttemptGroups = [...journeyAttempts.reduce((groups, attempt) => {
+    const group = groups.get(attempt.gameId) ?? {
+      gameId: attempt.gameId,
+      title: attempt.gameTitle || attempt.gameId,
+      count: 0,
+      latestAttempt: attempt
+    };
+    group.count += 1;
+    groups.set(attempt.gameId, group);
+    return groups;
+  }, new Map()).values()].sort((first, second) => second.count - first.count);
+  const maxJourneyAttemptCount = Math.max(1, ...journeyAttemptGroups.map(({ count }) => count));
+  const currentJourneyLevel = journeyLevels.find(({ status }) => status === 'in-progress')
+    ?? journeyLevels.find(({ status }) => status === 'available');
 
   return (
     <div className="parent-dashboard specialist-dashboard" dir="rtl">
@@ -309,6 +416,15 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
             }}>
             طلبات وسجل المواعيد{pendingCount ? ` (${pendingCount})` : ''}
           </button>
+          {assignedChildren.length > 0 && (
+            <button type="button" className={section === 'learning' ? 'dashboard-nav__item is-active' : 'dashboard-nav__item'}
+              aria-current={section === 'learning' ? 'page' : undefined} onClick={() => {
+                setSection('learning');
+                setMobileMenuOpen(false);
+              }}>
+              تقدم الأطفال
+            </button>
+          )}
           <button type="button" className={section === 'notifications' ? 'dashboard-nav__item is-active' : 'dashboard-nav__item'}
             aria-current={section === 'notifications' ? 'page' : undefined} onClick={() => {
               setSection('notifications');
@@ -326,7 +442,7 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
         <header className="dashboard-main__header">
           <div>
             <span className="dashboard-eyebrow">حرف · الأخصائيون</span>
-            <h2>{section === 'availability' ? 'مواعيدك المتاحة' : section === 'profile' ? 'تعديل الملف الشخصي' : section === 'notifications' ? 'الإشعارات' : 'طلبات وسجل المواعيد'}</h2>
+            <h2>{section === 'availability' ? 'مواعيدك المتاحة' : section === 'profile' ? 'تعديل الملف الشخصي' : section === 'notifications' ? 'الإشعارات' : section === 'learning' ? 'التقدم التعليمي للأطفال' : 'طلبات وسجل المواعيد'}</h2>
           </div>
           <div className="dashboard-main__header-actions">
             <NotificationBell onOpenNotifications={() => setSection('notifications')} />
@@ -456,6 +572,121 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
             </button>
           </form>
           </>
+        ) : section === 'learning' ? (
+          <section className="dashboard-section">
+            <h3>التقدم التعليمي للأطفال</h3>
+            <p className="dashboard-privacy-note">تظهر بيانات الرحلة بعد وجود موعد مؤكد وموافقة ولي الأمر على مشاركة تقارير التقدم. النجوم مكافآت تفاعلية وليست قياسًا تشخيصيًا.</p>
+            <div className="admin-reward-child-results">
+              {assignedChildren.map((child) => (
+                <button type="button" key={child.id}
+                  className={selectedLearningChildId === child.id ? 'is-selected' : ''}
+                  onClick={() => {
+                    setError('');
+                    setSelectedLearningChildId(child.id);
+                  }}>{child.name}</button>
+              ))}
+            </div>
+            {loadingSpecialistJourney && <p className="dashboard-loading" role="status">جارٍ تحميل رحلة الطفل…</p>}
+            {specialistJourney && (
+              <>
+                <div className="specialist-journey-summary">
+                  <article className="specialist-journey-stat specialist-journey-stat--teal">
+                    <span className="specialist-journey-stat__icon" aria-hidden="true">✦</span>
+                    <div><small>إجمالي المحاولات</small><strong>{specialistJourney.attemptCount ?? '—'}</strong>
+                      <p>محاولة محفوظة في سجل الطفل</p></div>
+                  </article>
+                  <article className="specialist-journey-stat specialist-journey-stat--orange">
+                    <span className="specialist-journey-stat__icon" aria-hidden="true">★</span>
+                    <div><small>النجوم المكتسبة</small><strong>{specialistJourney.rewards.totalStars}</strong>
+                      <p>مكافآت تفاعلية مسجلة</p></div>
+                  </article>
+                  <article className="specialist-journey-stat specialist-journey-stat--purple">
+                    <span className="specialist-journey-stat__icon" aria-hidden="true">▰</span>
+                    <div><small>المستويات المكتملة</small><strong>{completedLevels}<span> / {journeyLevels.length}</span></strong>
+                      <p>من مستويات المسارات المعينة</p></div>
+                  </article>
+                  <article className="specialist-journey-stat specialist-journey-stat--blue">
+                    <span className="specialist-journey-stat__icon" aria-hidden="true">✓</span>
+                    <div><small>الأنشطة المكتملة</small><strong>{completedActivities}<span> / {totalLevelActivities}</span></strong>
+                      <p>ضمن مستويات الطفل المعينة</p></div>
+                  </article>
+                </div>
+                {currentJourneyLevel && (
+                  <div className="specialist-journey-current">
+                    <span className="specialist-journey-current__marker" aria-hidden="true">➜</span>
+                    <div><small>{currentJourneyLevel.status === 'in-progress' ? 'المستوى الجاري' : 'المستوى التالي المتاح'}</small>
+                      <strong>{currentJourneyLevel.learningPathTitle} · {currentJourneyLevel.title}</strong>
+                      <p>{remainingRequiredGames} نشاطًا مطلوبًا متبقيًا في المستويات المفتوحة</p></div>
+                    <b>{currentJourneyLevel.completionPercent}%</b>
+                  </div>
+                )}
+                <div className="specialist-journey-charts">
+                  <section className="specialist-journey-chart">
+                    <header><div><h4>التقدم في المستويات</h4>
+                      <p>نسبة الأنشطة المكتملة من إجمالي أنشطة كل مستوى.</p></div>
+                      <span>{journeyLevels.length} مستويات</span></header>
+                    {journeyLevels.length ? journeyLevels.map((level) => {
+                      const percent = Math.max(0, Math.min(100, Number(level.completionPercent) || 0));
+                      return (
+                        <article className="specialist-level-bar" key={level.id}>
+                          <div className="specialist-level-bar__heading">
+                            <strong>{level.title}</strong>
+                            <span>{level.status === 'completed' ? 'مكتمل' : level.status === 'locked' ? 'مقفل' : level.status === 'in-progress' ? 'قيد التقدم' : 'متاح'}</span>
+                          </div>
+                          <div className="specialist-chart-track" role="progressbar" aria-label={`إنجاز ${level.title}`}
+                            aria-valuemin="0" aria-valuemax="100" aria-valuenow={percent}>
+                            <span className="specialist-chart-track__fill specialist-chart-track__fill--level"
+                              style={{ width: `${percent}%` }} />
+                          </div>
+                          <small>{level.completedGameIds.length} من {level.gameIds.length} أنشطة مكتملة · {percent}%</small>
+                        </article>
+                      );
+                    }) : <p className="specialist-journey-empty">لا توجد مستويات تعليمية معينة لهذا الطفل بعد.</p>}
+                  </section>
+                  <section className="specialist-journey-chart">
+                    <header><div><h4>المحاولات حسب النشاط</h4>
+                      <p>عدد المحاولات ضمن آخر 20 سجلًا، دون مقارنة درجات ألعاب مختلفة.</p></div>
+                      <span>الإجمالي: {specialistJourney.attemptCount ?? '—'}</span></header>
+                    {journeyAttemptGroups.length ? journeyAttemptGroups.slice(0, 6).map((group) => (
+                      <article className="specialist-activity-bar" key={group.gameId}>
+                        <div className="specialist-activity-bar__heading">
+                          <strong>{group.title}</strong>
+                          <b>{group.count} {group.count === 1 ? 'محاولة' : 'محاولات'}</b>
+                        </div>
+                        <div className="specialist-chart-track" aria-hidden="true">
+                          <span className="specialist-chart-track__fill specialist-chart-track__fill--activity"
+                            style={{ width: `${(group.count / maxJourneyAttemptCount) * 100}%` }} />
+                        </div>
+                        <small>آخر نتيجة مسجلة: {group.latestAttempt.correctCount} من {group.latestAttempt.totalQuestions}</small>
+                      </article>
+                    )) : <p className="specialist-journey-empty">لا توجد محاولات محفوظة لعرضها حتى الآن.</p>}
+                  </section>
+                </div>
+                <section className="specialist-journey-rewards">
+                  <div><h4>الشارات المكتسبة</h4>
+                    {earnedBadges.length
+                      ? <div className="specialist-journey-reward-list">{earnedBadges.map(({ id, name }) => <span key={id}>{name}</span>)}</div>
+                      : <p>لا توجد شارات مكتسبة بعد.</p>}
+                  </div>
+                  <div><h4>الهدايا المفتوحة</h4>
+                    {earnedGifts.length
+                      ? <div className="specialist-journey-reward-list specialist-journey-reward-list--gifts">{earnedGifts.map(({ id, name }) => <span key={id}>{name}</span>)}</div>
+                      : <p>لا توجد هدايا مفتوحة بعد.</p>}
+                  </div>
+                </section>
+                <section className="specialist-journey-recent">
+                  <h4>أحدث المحاولات المحفوظة</h4>
+                  {journeyAttempts.length ? journeyAttempts.slice(0, 5).map((attempt) => (
+                    <article key={attempt.id}>
+                      <strong>{attempt.gameTitle || attempt.gameId}</strong>
+                      <span>{attempt.correctCount} من {attempt.totalQuestions} إجابات صحيحة</span>
+                      <time dateTime={attempt.completedAt}>{new Date(attempt.completedAt).toLocaleDateString('ar')}</time>
+                    </article>
+                  )) : <p className="specialist-journey-empty">لم تُسجل محاولات بعد.</p>}
+                </section>
+              </>
+            )}
+          </section>
         ) : section === 'availability' ? (
           <form className="specialist-availability-form" onSubmit={saveAvailability}>
             <section className="dashboard-section">
@@ -579,7 +810,9 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
                       {appointment.status === 'pending' && <p>مهلة الرد حتى {new Intl.DateTimeFormat('ar-EG', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(appointment.expiresAt))}</p>}
                       {appointment.decisionNote && <p>ملاحظة القرار: {appointment.decisionNote}</p>}
                       {appointment.privateSpecialistNotes && <p>ملاحظات مهنية خاصة: {appointment.privateSpecialistNotes}</p>}
-                      {appointment.parentProgressReport && <p>ملخص ولي الأمر: {appointment.parentProgressReport.summary}</p>}
+                      {appointment.parentProgressReport?.status === 'draft' && (
+                        <p className="dashboard-privacy-note">توجد مسودة تقرير محفوظة، ولا تظهر لولي الأمر قبل نشرها.</p>
+                      )}
                     </div>
                     {appointment.status === 'pending' && (
                       <div className="specialist-appointment-card__actions">
@@ -639,6 +872,93 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
                             : appointment.meetingAvailable ? 'مجدولة' : 'غير متاحة'}.
                         ملاحظاتك المهنية الخاصة لا تظهر إلا لك.
                       </p>
+                    )}
+                    {appointment.status === 'accepted' && appointment.sessionStatus === 'completed' && (
+                      <section className="specialist-session-report" aria-label="تقرير الجلسة">
+                        {isPublishedSessionReport(appointment.parentProgressReport) ? (
+                          <details className="specialist-session-report__published">
+                            <summary>عرض التقرير المنشور · {formatAppointmentTime({
+                              ...appointment,
+                              startsAt: appointment.parentProgressReport.publishedAt
+                                ?? appointment.parentProgressReport.createdAt
+                                ?? appointment.startsAt
+                            })}</summary>
+                            <div className="specialist-session-report__content">
+                              {sessionReportFields.map(({ key, label }) => {
+                                const value = key === 'sessionSummary'
+                                  ? appointment.parentProgressReport.sessionSummary
+                                    || appointment.parentProgressReport.summary
+                                  : appointment.parentProgressReport[key];
+                                return <section key={key}><h5>{label}</h5>
+                                  <p>{value || 'لم تتم إضافة محتوى لهذا القسم.'}</p>
+                                </section>;
+                              })}
+                              {appointment.parentProgressReport.suggestedActivities?.length > 0 && (
+                                <section><h5>أنشطة مقترحة</h5>
+                                  <ul>{appointment.parentProgressReport.suggestedActivities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+                                </section>
+                              )}
+                            </div>
+                          </details>
+                        ) : (
+                          <>
+                            <button type="button" className="button button--small button--outline"
+                              onClick={() => openSessionReport(appointment)}>
+                              {appointment.parentProgressReport?.status === 'draft' ? 'تعديل مسودة التقرير' : 'إعداد تقرير الجلسة'}
+                            </button>
+                            {reportAppointmentId === appointment.id && (
+                              <div className="specialist-session-report__editor">
+                                {reportPreview ? (
+                                  <article className="specialist-session-report__content" aria-label="معاينة التقرير">
+                                    <h4>معاينة تقرير الجلسة · {appointment.childName || 'ملف طفل'}</h4>
+                                    {sessionReportFields.map(({ key, label }) => (
+                                      <section key={key}><h5>{label}</h5>
+                                        <p>{sessionReportDraft[key] || 'لم تتم إضافة محتوى لهذا القسم.'}</p>
+                                      </section>
+                                    ))}
+                                  </article>
+                                ) : (
+                                  <div className="specialist-session-report__fields">
+                                    {sessionReportFields.map(({ key, label, rows }) => (
+                                      <label key={key} htmlFor={`session-report-${appointment.id}-${key}`}>
+                                        {label}
+                                        <textarea id={`session-report-${appointment.id}-${key}`} rows={rows}
+                                          maxLength={key === 'sessionSummary' || key === 'activitiesPerformed'
+                                            || key === 'specialistObservations' ? 4000 : 3000}
+                                          value={sessionReportDraft[key]}
+                                          onChange={(event) => setSessionReportDraft((current) => ({
+                                            ...current,
+                                            [key]: event.target.value
+                                          }))} />
+                                      </label>
+                                    ))}
+                                  </div>
+                                )}
+                                <div className="specialist-session-report__actions">
+                                  <button type="button" className="button button--small button--outline"
+                                    disabled={Boolean(busyReportId)}
+                                    onClick={() => setReportPreview((current) => !current)}>
+                                    {reportPreview ? 'العودة للتحرير' : 'معاينة التقرير'}
+                                  </button>
+                                  <button type="button" className="button button--small button--outline"
+                                    disabled={Boolean(busyReportId)}
+                                    onClick={() => saveSessionReport(appointment)}>
+                                    {busyReportId === appointment.id ? 'جارٍ الحفظ…' : 'حفظ كمسودة'}
+                                  </button>
+                                  <button type="button" className="button button--small button--primary"
+                                    disabled={Boolean(busyReportId)}
+                                    onClick={() => saveSessionReport(appointment, true)}>
+                                    {busyReportId === appointment.id ? 'جارٍ النشر…' : 'نشر لولي الأمر'}
+                                  </button>
+                                  <button type="button" className="button button--small button--outline"
+                                    disabled={Boolean(busyReportId)}
+                                    onClick={() => setReportAppointmentId('')}>إغلاق</button>
+                                </div>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </section>
                     )}
                   </article>
                 ))}

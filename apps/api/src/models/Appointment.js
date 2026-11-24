@@ -88,9 +88,20 @@ const appointmentSchema = new mongoose.Schema({
   payment: { type: sessionPaymentSchema, default: undefined },
   privateSpecialistNotes: { type: String, trim: true, maxlength: 4000, default: '' },
   parentProgressReport: {
+    status: { type: String, enum: ['draft', 'published'] },
     summary: { type: String, trim: true, maxlength: 2000, default: '' },
     suggestedActivities: { type: [String], default: [] },
-    createdAt: { type: Date, default: null }
+    sessionSummary: { type: String, trim: true, maxlength: 4000, default: '' },
+    sessionGoals: { type: String, trim: true, maxlength: 3000, default: '' },
+    activitiesPerformed: { type: String, trim: true, maxlength: 4000, default: '' },
+    specialistObservations: { type: String, trim: true, maxlength: 4000, default: '' },
+    positiveAchievements: { type: String, trim: true, maxlength: 3000, default: '' },
+    furtherPractice: { type: String, trim: true, maxlength: 3000, default: '' },
+    parentRecommendations: { type: String, trim: true, maxlength: 3000, default: '' },
+    nextSessionPlan: { type: String, trim: true, maxlength: 3000, default: '' },
+    createdAt: { type: Date, default: null },
+    updatedAt: { type: Date, default: null },
+    publishedAt: { type: Date, default: null }
   },
   slotReserved: { type: Boolean, required: true, default: true },
   reservationKeys: { type: [Date], required: true }

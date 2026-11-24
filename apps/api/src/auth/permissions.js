@@ -114,6 +114,22 @@ export function permissionForAdminRequest(method, requestPath) {
   if (requestPath.startsWith('/games/')) return 'activities.manage';
   if (requestPath === '/assets') return 'activities.view';
   if (requestPath.startsWith('/assets/')) return isRead(method) ? 'activities.view' : 'activities.manage';
+  if (requestPath === '/learning-levels' || /^\/learning-levels\/[^/]+$/.test(requestPath)) {
+    return isRead(method) ? 'learningPaths.view' : 'learningPaths.manage';
+  }
+  if (/^\/learning-paths\/[^/]+\/learning-levels\/reorder$/.test(requestPath)) {
+    return 'learningPaths.manage';
+  }
+  if (requestPath === '/rewards' || /^\/rewards\/[^/]+$/.test(requestPath)) {
+    return isRead(method) ? 'learningPaths.view' : 'learningPaths.manage';
+  }
+  if (requestPath === '/gamification-settings') {
+    return isRead(method) ? 'learningPaths.view' : 'learningPaths.manage';
+  }
+  if (requestPath === '/reward-transactions') return 'learningPaths.view';
+  if (requestPath === '/gamification-children' || /^\/gamification-children\/[^/]+\/rewards$/.test(requestPath)) {
+    return 'children.view';
+  }
   return null;
 }
 

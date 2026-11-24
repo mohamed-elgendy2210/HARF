@@ -106,6 +106,10 @@ export function createAppointmentRepository() {
         .populate({ path: 'parentUserId', select: 'parentProfile.displayName' })
         .sort({ startsAt: 1, _id: 1 }).limit(100).lean();
     },
+    findSpecialistChildAssignment(specialistUserId, childId) {
+      return Appointment.findOne({ specialistUserId, childId, status: 'accepted' })
+        .select('_id').lean();
+    },
     findOwnedAppointment(appointmentId, ownerField, userId) {
       return Appointment.findOne({ _id: appointmentId, [ownerField]: userId })
         .populate({ path: 'childId', select: 'displayName' })
@@ -276,11 +280,55 @@ export function createAppointmentRepository() {
           ...(hasMeeting ? { 'meeting.status': 'ended', 'meeting.endedAt': now } : {}),
           parentProgressReport: parentReport
             ? {
+                status: 'published',
                 summary: parentReport.summary,
                 suggestedActivities: parentReport.suggestedActivities,
-                createdAt: now
+                sessionSummary: parentReport.summary,
+                createdAt: now,
+                updatedAt: now,
+                publishedAt: now
               }
             : null
+        }
+      }, { new: true, runValidators: true }).lean();
+    },
+    saveSessionReportDraft(appointmentId, specialistUserId, report, createdAt, now) {
+      return Appointment.findOneAndUpdate({
+        _id: appointmentId,
+        specialistUserId,
+        status: 'accepted',
+        sessionStatus: 'completed',
+        $or: [
+          { 'parentProgressReport.status': 'draft' },
+          { 'parentProgressReport.createdAt': null }
+        ]
+      }, {
+        $set: {
+          parentProgressReport: {
+            ...report,
+            status: 'draft',
+            summary: '',
+            suggestedActivities: [],
+            createdAt,
+            updatedAt: now,
+            publishedAt: null
+          }
+        }
+      }, { new: true, runValidators: true }).lean();
+    },
+    publishSessionReport(appointmentId, specialistUserId, now) {
+      return Appointment.findOneAndUpdate({
+        _id: appointmentId,
+        specialistUserId,
+        status: 'accepted',
+        sessionStatus: 'completed',
+        'parentProgressReport.status': 'draft',
+        'parentProgressReport.sessionSummary': { $ne: '' }
+      }, {
+        $set: {
+          'parentProgressReport.status': 'published',
+          'parentProgressReport.publishedAt': now,
+          'parentProgressReport.updatedAt': now
         }
       }, { new: true, runValidators: true }).lean();
     },

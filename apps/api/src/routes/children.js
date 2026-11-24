@@ -14,7 +14,10 @@ import {
   completeChildRegistrationSchema,
   updateChildSchema
 } from '../validation/children.js';
-import { childAttemptsQuerySchema } from '../validation/games.js';
+import { childAttemptsQuerySchema, childProgressAnalyticsQuerySchema } from '../validation/games.js';
+import {
+  gamificationChildParamsSchema
+} from '../validation/gamification.js';
 import {
   confirmPathAssignmentsSchema,
   questionnaireSubmissionSchema
@@ -25,6 +28,7 @@ export function createChildrenRouter({
   childService,
   gameService,
   learningPathService,
+  gamificationService,
   subscriptionService,
   appointmentService,
   authenticationMiddleware
@@ -98,6 +102,62 @@ export function createChildrenRouter({
     );
     response.json(history);
   });
+
+  router.get('/:childId/progress-analytics', validate(childIdSchema, 'params'), validate(childProgressAnalyticsQuerySchema, 'query'), async (request, response) => {
+    response.set('Cache-Control', 'private, no-store');
+    const analytics = await gameService.getChildProgressAnalytics(
+      request.authenticated.user._id,
+      request.params.childId,
+      request.validatedQuery.period,
+      request.validatedQuery.gameId
+    );
+    response.json({ analytics });
+  });
+
+  if (gamificationService) {
+    router.get('/:childId/learning-journey', validate(gamificationChildParamsSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json({
+        levels: await gamificationService.listLevels(
+          request.authenticated.user._id,
+          request.params.childId
+        )
+      });
+    });
+    router.get('/:childId/level-progress', validate(gamificationChildParamsSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json({
+        levels: await gamificationService.listLevels(
+          request.authenticated.user._id,
+          request.params.childId
+        )
+      });
+    });
+    router.get('/:childId/rewards', validate(gamificationChildParamsSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json(await gamificationService.getChildRewards(
+        request.authenticated.user._id,
+        request.params.childId
+      ));
+    });
+    router.get('/:childId/reward-history', validate(gamificationChildParamsSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      const rewards = await gamificationService.getChildRewards(
+        request.authenticated.user._id,
+        request.params.childId
+      );
+      response.json({ history: rewards.history, totalStars: rewards.totalStars });
+    });
+    router.get('/:childId/achievements', validate(gamificationChildParamsSchema, 'params'), async (request, response) => {
+      response.set('Cache-Control', 'private, no-store');
+      response.json({
+        achievements: await gamificationService.getAchievements(
+          request.authenticated.user._id,
+          request.params.childId
+        )
+      });
+    });
+  }
 
   if (learningPathService) {
     router.get('/:childId/learning-progress', validate(childIdSchema, 'params'), async (request, response) => {

@@ -11,6 +11,7 @@ export const NOTIFICATION_TYPES = Object.freeze({
   SESSION_REMINDER: 'session_reminder',
   SESSION_REPORT: 'session_report',
   LEARNING_PATH_ASSIGNED: 'learning_path_assigned',
+  LEVEL_COMPLETED: 'level_completed',
   TESTIMONIAL_SUBMITTED: 'testimonial_submitted',
   TESTIMONIAL_DECISION: 'testimonial_decision',
   SYSTEM: 'system_notification'

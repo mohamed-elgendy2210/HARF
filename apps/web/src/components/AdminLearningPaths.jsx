@@ -22,6 +22,42 @@ const emptyPath = {
   rules: { minimumAttempts: 3, sampleSize: 5, targetAccuracyPercent: 75 }
 };
 
+function emptyLevel(pathKey = '', sortOrder = 0, levelCompletionStars = 20) {
+  return {
+    learningPathKey: pathKey,
+    title: '',
+    titleEnglish: '',
+    description: '',
+    descriptionEnglish: '',
+    coverImageAssetId: null,
+    sortOrder,
+    gameIds: [],
+    minimumCompletedGames: 1,
+    minimumScorePercent: 0,
+    mandatoryGameIds: [],
+    completionRule: 'count',
+    additionalGamesCount: 0,
+    unlockAfterLevelId: null,
+    completionReward: { stars: levelCompletionStars, badgeRewardId: null, giftRewardId: null },
+    rewardsActive: true,
+    celebrationEnabled: true,
+    active: true
+  };
+}
+
+function emptyReward(type = 'badge') {
+  return {
+    name: '',
+    description: '',
+    type,
+    imageAssetId: null,
+    category: type === 'badge' ? 'achievement' : 'accessory',
+    rarity: 'common',
+    unlockDescription: '',
+    active: true
+  };
+}
+
 const learningSkills = [
   { id: 'communication', label: 'التواصل' },
   { id: 'vocabulary', label: 'المفردات' },
@@ -55,22 +91,47 @@ export default function AdminLearningPaths({ logoUrl }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [levels, setLevels] = useState([]);
+  const [rewards, setRewards] = useState([]);
+  const [activeLevelPathKey, setActiveLevelPathKey] = useState('');
+  const [mediaAssets, setMediaAssets] = useState([]);
+  const [gamificationSettings, setGamificationSettings] = useState(null);
+  const [levelEditor, setLevelEditor] = useState(null);
+  const [rewardEditor, setRewardEditor] = useState(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [rewardSearchText, setRewardSearchText] = useState('');
+  const [rewardChildren, setRewardChildren] = useState([]);
+  const [selectedRewardChild, setSelectedRewardChild] = useState(null);
+  const [rewardSummary, setRewardSummary] = useState(null);
+  const [rewardHistory, setRewardHistory] = useState([]);
+  const [rewardHistoryType, setRewardHistoryType] = useState('');
 
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const [pathData, questionnaireData, assignmentData, reviewData] = await Promise.all([
+      const [pathData, questionnaireData, assignmentData, reviewData, levelData, rewardData, settingsData, assetData] = await Promise.all([
         apiRequest('/api/v1/admin/learning-paths'),
         apiRequest('/api/v1/admin/learning-questionnaire'),
         apiRequest('/api/v1/admin/learning-assignments'),
-        apiRequest('/api/v1/admin/learning-registration-reviews')
+        apiRequest('/api/v1/admin/learning-registration-reviews'),
+        apiRequest('/api/v1/admin/learning-levels'),
+        apiRequest('/api/v1/admin/rewards'),
+        apiRequest('/api/v1/admin/gamification-settings'),
+        apiRequest('/api/v1/admin/assets')
       ]);
       setPaths(pathData.paths);
+      setActiveLevelPathKey((current) => current && pathData.paths.some(({ key }) => key === current)
+        ? current
+        : pathData.paths[0]?.key ?? '');
       setAvailableGames(pathData.availableGames);
       setQuestionnaire(questionnaireData.questionnaire);
       setAssignments(assignmentData.assignments);
       setRegistrationReviews(reviewData.reviews);
+      setLevels(levelData.levels);
+      setRewards(rewardData.rewards);
+      setGamificationSettings(settingsData.settings);
+      setMediaAssets(assetData.assets.filter(({ kind, active, available }) => kind === 'image' && active && available));
       setEditingPath((current) => current
         ? pathData.paths.find((path) => path.key === current.key) ?? current
         : null);
@@ -298,8 +359,301 @@ export default function AdminLearningPaths({ logoUrl }) {
     }
   };
 
+  const saveLevel = async (event) => {
+    event.preventDefault();
+    if (!levelEditor) return;
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const payload = {
+        learningPathKey: levelEditor.learningPathKey,
+        title: levelEditor.title,
+        titleEnglish: levelEditor.titleEnglish ?? '',
+        description: levelEditor.description,
+        descriptionEnglish: levelEditor.descriptionEnglish ?? '',
+        coverImageAssetId: levelEditor.coverImageAssetId ?? null,
+        sortOrder: Number(levelEditor.sortOrder),
+        gameIds: levelEditor.gameIds,
+        minimumCompletedGames: Number(levelEditor.minimumCompletedGames),
+        minimumScorePercent: Number(levelEditor.minimumScorePercent),
+        mandatoryGameIds: levelEditor.mandatoryGameIds,
+        completionRule: levelEditor.completionRule,
+        additionalGamesCount: Number(levelEditor.additionalGamesCount ?? 0),
+        unlockAfterLevelId: levelEditor.unlockAfterLevelId ?? null,
+        completionReward: {
+          stars: levelEditor.completionReward?.stars ?? null,
+          badgeRewardId: levelEditor.completionReward?.badgeRewardId ?? null,
+          giftRewardId: levelEditor.completionReward?.giftRewardId ?? null
+        },
+        rewardsActive: levelEditor.rewardsActive,
+        celebrationEnabled: levelEditor.celebrationEnabled,
+        active: levelEditor.active
+      };
+      const levelId = levelEditor.id ?? levelEditor._id;
+      const result = await apiRequest(
+        levelId
+          ? `/api/v1/admin/learning-levels/${encodeURIComponent(levelId)}`
+          : '/api/v1/admin/learning-levels',
+        {
+          method: levelId ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }
+      );
+      setLevelEditor(result.level);
+      setNotice('تم حفظ المستوى وإعداداته.');
+      await load();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteLevel = async () => {
+    if (!levelEditor || !window.confirm('هل تريد حذف هذا المستوى؟ لا يمكن حذف مستوى له تقدم محفوظ.')) return;
+    setSaving(true);
+    setError('');
+    try {
+      await apiRequest(`/api/v1/admin/learning-levels/${encodeURIComponent(levelEditor.id ?? levelEditor._id)}`, {
+        method: 'DELETE'
+      });
+      setLevelEditor(null);
+      setNotice('تم حذف المستوى.');
+      await load();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const reorderLevels = async (level, offset) => {
+    const pathLevels = levels
+      .filter(({ learningPathKey }) => learningPathKey === level.learningPathKey)
+      .sort((left, right) => left.sortOrder - right.sortOrder);
+    const index = pathLevels.findIndex(({ id }) => id === level.id);
+    const target = index + offset;
+    if (target < 0 || target >= pathLevels.length) return;
+    [pathLevels[index], pathLevels[target]] = [pathLevels[target], pathLevels[index]];
+    try {
+      setSaving(true);
+      await apiRequest(`/api/v1/admin/learning-paths/${encodeURIComponent(level.learningPathKey)}/learning-levels/reorder`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderedIds: pathLevels.map(({ id }) => id) })
+      });
+      setNotice('تم تحديث ترتيب مستويات المغامرة.');
+      await load();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveReward = async (event) => {
+    event.preventDefault();
+    if (!rewardEditor) return;
+    setSaving(true);
+    setError('');
+    try {
+      const payload = {
+        name: rewardEditor.name,
+        description: rewardEditor.description,
+        type: rewardEditor.type,
+        imageAssetId: rewardEditor.imageAssetId ?? null,
+        category: rewardEditor.category,
+        rarity: rewardEditor.rarity,
+        unlockDescription: rewardEditor.unlockDescription,
+        active: rewardEditor.active
+      };
+      const rewardId = rewardEditor.id ?? rewardEditor._id;
+      const result = await apiRequest(
+        rewardId
+          ? `/api/v1/admin/rewards/${encodeURIComponent(rewardId)}`
+          : '/api/v1/admin/rewards',
+        {
+          method: rewardId ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        }
+      );
+      setRewardEditor(result.reward);
+      setNotice('تم حفظ تعريف المكافأة.');
+      await load();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteReward = async () => {
+    if (!rewardEditor || !window.confirm('هل تريد حذف المكافأة؟ إذا كانت مرتبطة بمستوى أو سجل صرف، عطّلها بدلًا من حذفها.')) return;
+    setSaving(true);
+    setError('');
+    try {
+      await apiRequest(`/api/v1/admin/rewards/${encodeURIComponent(rewardEditor._id ?? rewardEditor.id)}`, {
+        method: 'DELETE'
+      });
+      setRewardEditor(null);
+      setNotice('تم حذف المكافأة.');
+      await load();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveRewardSettings = async (event) => {
+    event.preventDefault();
+    if (!gamificationSettings) return;
+    setSettingsSaving(true);
+    setError('');
+    try {
+      const payload = {
+        completionStars: Number(gamificationSettings.completionStars),
+        performanceBonusStars: Number(gamificationSettings.performanceBonusStars),
+        performanceThresholdPercent: Number(gamificationSettings.performanceThresholdPercent),
+        firstCompletionBonusStars: Number(gamificationSettings.firstCompletionBonusStars),
+        levelCompletionStars: Number(gamificationSettings.levelCompletionStars),
+        adventureCompletionStars: Number(gamificationSettings.adventureCompletionStars),
+        repeatRewardsEnabled: gamificationSettings.repeatRewardsEnabled,
+        maxRepeatRewardCount: Number(gamificationSettings.maxRepeatRewardCount),
+        repeatCooldownMinutes: Number(gamificationSettings.repeatCooldownMinutes),
+        gameRewards: gamificationSettings.gameRewards.map((rule) => ({
+          ...rule,
+          completionStars: Number(rule.completionStars),
+          performanceBonusStars: Number(rule.performanceBonusStars),
+          performanceThresholdPercent: Number(rule.performanceThresholdPercent),
+          firstCompletionBonusStars: Number(rule.firstCompletionBonusStars),
+          maxRepeatRewardCount: Number(rule.maxRepeatRewardCount),
+          repeatCooldownMinutes: Number(rule.repeatCooldownMinutes)
+        }))
+      };
+      const { settings } = await apiRequest('/api/v1/admin/gamification-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      setGamificationSettings(settings);
+      setNotice('تم حفظ إعدادات النجوم والمكافآت.');
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const searchRewardHistory = async (event) => {
+    event.preventDefault();
+    setError('');
+    try {
+      const { children: matches } = await apiRequest(
+        `/api/v1/admin/gamification-children?q=${encodeURIComponent(rewardSearchText.trim())}`
+      );
+      setRewardChildren(matches);
+      setSelectedRewardChild(null);
+      setRewardHistory([]);
+      if (matches.length === 0) setNotice('لا يوجد طفل بهذا الاسم.');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  const selectRewardChild = async (child) => {
+    setSelectedRewardChild(child);
+    setError('');
+    try {
+      const [summary, history] = await Promise.all([
+        apiRequest(`/api/v1/admin/gamification-children/${child.id}/rewards`),
+        apiRequest(`/api/v1/admin/reward-transactions?childId=${encodeURIComponent(child.id)}${rewardHistoryType ? `&rewardType=${rewardHistoryType}` : ''}`)
+      ]);
+      setRewardSummary({ totalStars: summary.totalStars, badges: summary.badges.filter(({ earned }) => earned), gifts: summary.gifts.filter(({ earned }) => earned) });
+      setRewardHistory(history.transactions);
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+
+  const updateLevelEditor = (field, value) => {
+    setLevelEditor((current) => ({ ...current, [field]: value }));
+  };
+
+  const updateLevelReward = (field, value) => {
+    setLevelEditor((current) => ({
+      ...current,
+      completionReward: { ...current.completionReward, [field]: value }
+    }));
+  };
+
+  const toggleLevelGame = (gameId, mandatory = false) => {
+    setLevelEditor((current) => {
+      const field = mandatory ? 'mandatoryGameIds' : 'gameIds';
+      const values = new Set(current[field] ?? []);
+      if (values.has(gameId)) values.delete(gameId);
+      else values.add(gameId);
+      const next = { ...current, [field]: [...values] };
+      if (mandatory && !next.gameIds.includes(gameId)) next.gameIds.push(gameId);
+      if (!mandatory && !values.has(gameId)) {
+        next.mandatoryGameIds = next.mandatoryGameIds.filter((id) => id !== gameId);
+      }
+      return next;
+    });
+  };
+
+  const moveLevelGame = (index, offset) => {
+    setLevelEditor((current) => {
+      const target = index + offset;
+      if (target < 0 || target >= current.gameIds.length) return current;
+      const gameIds = [...current.gameIds];
+      [gameIds[index], gameIds[target]] = [gameIds[target], gameIds[index]];
+      return { ...current, gameIds };
+    });
+  };
+
+  const updateSettings = (field, value) => {
+    setGamificationSettings((current) => ({ ...current, [field]: value }));
+  };
+
+  const addGameRewardRule = (gameId) => {
+    if (!gameId || gamificationSettings.gameRewards.some((rule) => rule.gameId === gameId)) return;
+    setGamificationSettings((current) => ({
+      ...current,
+      gameRewards: [...current.gameRewards, {
+        gameId,
+        completionStars: current.completionStars,
+        performanceBonusStars: current.performanceBonusStars,
+        performanceThresholdPercent: current.performanceThresholdPercent,
+        firstCompletionBonusStars: current.firstCompletionBonusStars,
+        repeatRewardsEnabled: current.repeatRewardsEnabled,
+        maxRepeatRewardCount: current.maxRepeatRewardCount,
+        repeatCooldownMinutes: current.repeatCooldownMinutes
+      }]
+    }));
+  };
+
+  const updateGameRewardRule = (gameId, field, value) => {
+    setGamificationSettings((current) => ({
+      ...current,
+      gameRewards: current.gameRewards.map((rule) => rule.gameId === gameId
+        ? { ...rule, [field]: value }
+        : rule)
+    }));
+  };
+
+  const removeGameRewardRule = (gameId) => {
+    setGamificationSettings((current) => ({
+      ...current,
+      gameRewards: current.gameRewards.filter((rule) => rule.gameId !== gameId)
+    }));
+  };
+
   return (
-    <section className="admin-dashboard__content admin-dashboard-panel">
+    <section className="admin-dashboard__content admin-dashboard-panel admin-learning-management">
       <div className="admin-dashboard-panel__heading">
         <div>
           <h2>إدارة مسارات التعلّم</h2>
@@ -311,6 +665,8 @@ export default function AdminLearningPaths({ logoUrl }) {
       </div>
       <div className="admin-learning-tabs" role="tablist" aria-label="أقسام إعداد التعلّم">
         <button type="button" aria-selected={tab === 'paths'} onClick={() => setTab('paths')}>المسارات</button>
+        <button type="button" aria-selected={tab === 'levels'} onClick={() => setTab('levels')}>المستويات والمغامرة</button>
+        <button type="button" aria-selected={tab === 'rewards'} onClick={() => setTab('rewards')}>المكافآت والنجوم</button>
         <button type="button" aria-selected={tab === 'questionnaire'} onClick={() => setTab('questionnaire')}>استبيان وليّ الأمر</button>
         <button type="button" aria-selected={tab === 'assignments'} onClick={() => setTab('assignments')}>تعيينات الأطفال</button>
         <button type="button" aria-selected={tab === 'reviews'} onClick={() => setTab('reviews')}>
@@ -571,6 +927,533 @@ export default function AdminLearningPaths({ logoUrl }) {
               <button type="button" className="button button--primary" onClick={() => setEditingPath({ ...emptyPath })}>إنشاء مسار جديد</button>
             </div>
           )}
+        </div>
+      )}
+      {!loading && tab === 'levels' && (
+        <div className="admin-learning-path-manager">
+          <aside className="admin-path-sidebar">
+            <label>المغامرة / مسار التعلّم
+              <select value={activeLevelPathKey} onChange={(event) => {
+                setActiveLevelPathKey(event.target.value);
+                setLevelEditor(null);
+              }}>
+                {paths.map((path) => <option value={path.key} key={path.key}>{path.title}</option>)}
+              </select>
+            </label>
+            <div className="admin-path-sidebar__heading">
+              <div><span>المستويات</span><strong>{levels.filter(({ learningPathKey }) => learningPathKey === activeLevelPathKey).length} مستوى</strong></div>
+              <button type="button" className="admin-path-create" disabled={!activeLevelPathKey}
+                onClick={() => setLevelEditor(emptyLevel(
+                  activeLevelPathKey,
+                  levels.filter(({ learningPathKey }) => learningPathKey === activeLevelPathKey).length,
+                  gamificationSettings?.levelCompletionStars ?? 20
+                ))}>+</button>
+            </div>
+            {levels.filter(({ learningPathKey }) => learningPathKey === activeLevelPathKey)
+              .sort((left, right) => left.sortOrder - right.sortOrder)
+              .map((level, index, list) => (
+                <article className="admin-level-list-item" key={level.id}>
+                  <button type="button" className={`admin-learning-path-list__item admin-level-list-item__select${(levelEditor?.id ?? levelEditor?._id) === level.id ? ' is-selected' : ''}`}
+                    onClick={() => setLevelEditor({ ...level })}>
+                    <strong>{index + 1}. {level.title}</strong>
+                    <small>{level.gameIds.length} ألعاب · {level.active ? 'نشط' : 'معطّل'}</small>
+                  </button>
+                  <div className="admin-level-order-actions">
+                    <button type="button" aria-label="رفع المستوى" disabled={saving || index === 0}
+                      onClick={() => void reorderLevels(level, -1)}>↑</button>
+                    <button type="button" aria-label="خفض المستوى" disabled={saving || index === list.length - 1}
+                      onClick={() => void reorderLevels(level, 1)}>↓</button>
+                  </div>
+                </article>
+              ))}
+            {activeLevelPathKey && !levels.some(({ learningPathKey }) => learningPathKey === activeLevelPathKey)
+              && <p>أضف أول مستوى لبدء بناء المغامرة.</p>}
+          </aside>
+          {levelEditor ? (
+            <form className="admin-learning-path" onSubmit={saveLevel}>
+              <div className="admin-path-editor-heading">
+                <div>
+                  <span className="admin-questionnaire-step">{levelEditor.id || levelEditor._id ? 'تعديل مستوى' : 'مستوى جديد'}</span>
+                  <h3>{levelEditor.title || 'مستوى مغامرة جديد'}</h3>
+                  <p>اختَر الألعاب وقاعدة الإكمال والمكافآت. تُحسب النتيجة على الخادم من المحاولة المحفوظة.</p>
+                </div>
+                <label className="admin-level-active-toggle">
+                  <input type="checkbox" checked={levelEditor.active}
+                    onChange={(event) => updateLevelEditor('active', event.target.checked)} />
+                  المستوى نشط
+                </label>
+              </div>
+              <div className="admin-path-form-grid">
+                <label>المسار
+                  <select value={levelEditor.learningPathKey} required
+                    onChange={(event) => updateLevelEditor('learningPathKey', event.target.value)}>
+                    {paths.map((path) => <option value={path.key} key={path.key}>{path.title}</option>)}
+                  </select>
+                </label>
+                <label>رقم الترتيب
+                  <input type="number" min="0" value={levelEditor.sortOrder} readOnly aria-describedby="level-order-help" />
+                </label>
+                <small id="level-order-help">استخدم سهمَي الرفع والخفض في قائمة المستويات لتغيير الترتيب.</small>
+                <label className="admin-path-field--wide">اسم المستوى بالعربية
+                  <input required maxLength={120} value={levelEditor.title}
+                    onChange={(event) => updateLevelEditor('title', event.target.value)} />
+                </label>
+                <label className="admin-path-field--wide">اسم المستوى بالإنجليزية (اختياري)
+                  <input maxLength={120} value={levelEditor.titleEnglish ?? ''}
+                    onChange={(event) => updateLevelEditor('titleEnglish', event.target.value)} />
+                </label>
+                <label className="admin-path-field--wide">الوصف بالعربية
+                  <textarea required rows={2} maxLength={500} value={levelEditor.description}
+                    onChange={(event) => updateLevelEditor('description', event.target.value)} />
+                </label>
+                <label className="admin-path-field--wide">الوصف بالإنجليزية (اختياري)
+                  <textarea rows={2} maxLength={500} value={levelEditor.descriptionEnglish ?? ''}
+                    onChange={(event) => updateLevelEditor('descriptionEnglish', event.target.value)} />
+                </label>
+                <label className="admin-path-field--wide">صورة غلاف من مكتبة الوسائط
+                  <select value={levelEditor.coverImageAssetId ?? ''}
+                    onChange={(event) => updateLevelEditor('coverImageAssetId', event.target.value || null)}>
+                    <option value="">بدون صورة غلاف</option>
+                    {mediaAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.displayName}</option>)}
+                  </select>
+                </label>
+              </div>
+              <section className="admin-path-editor-section">
+                <h4>ألعاب المستوى وترتيبها</h4>
+                <p>الألعاب المتاحة مأخوذة من أنشطة المسار المنشورة وغير التجريبية.</p>
+                <div className="admin-level-game-picker">
+                  {availableGames.filter(({ gameId }) => paths.find(({ key }) => key === levelEditor.learningPathKey)
+                    ?.activities.some((activity) => activity.gameId === gameId)).map((game) => (
+                    <label className="admin-level-game-option" key={game.gameId}>
+                      <input type="checkbox" checked={levelEditor.gameIds.includes(game.gameId)}
+                        onChange={() => toggleLevelGame(game.gameId)} />
+                      <span>{game.title}<small>{game.gameId}</small></span>
+                    </label>
+                  ))}
+                </div>
+                <ol className="admin-level-selected-games">
+                  {levelEditor.gameIds.map((gameId, index) => (
+                    <li key={gameId}>
+                      <span>{availableGames.find((game) => game.gameId === gameId)?.title ?? gameId}</span>
+                      <label><input type="checkbox" checked={levelEditor.mandatoryGameIds.includes(gameId)}
+                        onChange={() => toggleLevelGame(gameId, true)} /> إلزامية</label>
+                      <button type="button" disabled={index === 0} onClick={() => moveLevelGame(index, -1)} aria-label="رفع اللعبة">↑</button>
+                      <button type="button" disabled={index === levelEditor.gameIds.length - 1} onClick={() => moveLevelGame(index, 1)} aria-label="خفض اللعبة">↓</button>
+                      <button type="button" onClick={() => toggleLevelGame(gameId)} aria-label="إزالة اللعبة">إزالة</button>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+              <section className="admin-path-editor-section">
+                <h4>قاعدة إكمال المستوى</h4>
+                <label>طريقة الإكمال
+                  <select value={levelEditor.completionRule}
+                    onChange={(event) => setLevelEditor((current) => ({
+                      ...current,
+                      completionRule: event.target.value,
+                      minimumScorePercent: event.target.value === 'mandatory-score' && current.minimumScorePercent === 0
+                        ? 70
+                        : current.minimumScorePercent
+                    }))}>
+                    <option value="all">إنهاء كل الألعاب المحددة</option>
+                    <option value="count">إنهاء عدد محدد من الألعاب، مع الألعاب الإلزامية</option>
+                    <option value="mandatory-count">إنهاء الألعاب الإلزامية وعدد إضافي من الألعاب</option>
+                    <option value="mandatory-score">إنهاء كل الألعاب الإلزامية وتحقيق حد النتيجة</option>
+                  </select>
+                </label>
+                <p className="dashboard-privacy-note">
+                  {levelEditor.completionRule === 'all'
+                    ? 'يُكمل الطفل المستوى عند إنهاء كل الألعاب النشطة المعيّنة.'
+                    : levelEditor.completionRule === 'mandatory-count'
+                      ? 'يجب إنهاء جميع الألعاب الإلزامية بالإضافة إلى العدد الإضافي أدناه.'
+                      : levelEditor.completionRule === 'mandatory-score'
+                        ? 'يجب إنهاء كل الألعاب الإلزامية وتحقيق حد النتيجة في كل لعبة منها.'
+                        : 'يجب إنهاء الألعاب الإلزامية والعدد الإجمالي المحدد أدناه.'}
+                </p>
+                {levelEditor.completionRule === 'count' && (
+                  <label>عدد الألعاب المطلوب إنهاؤها
+                    <input type="number" min={Math.max(1, levelEditor.mandatoryGameIds.length)}
+                      max={levelEditor.gameIds.length} value={levelEditor.minimumCompletedGames}
+                      onChange={(event) => updateLevelEditor('minimumCompletedGames', Number(event.target.value))} />
+                  </label>
+                )}
+                {levelEditor.completionRule === 'mandatory-count' && (
+                  <label>عدد الألعاب الإضافية بعد الإلزامية
+                    <input type="number" min="0"
+                      max={Math.max(0, levelEditor.gameIds.length - levelEditor.mandatoryGameIds.length)}
+                      value={levelEditor.additionalGamesCount}
+                      onChange={(event) => updateLevelEditor('additionalGamesCount', Number(event.target.value))} />
+                  </label>
+                )}
+                <label>أقل نتيجة مقبولة لكل لعبة مطلوبة (%)
+                  <input type="number" min={levelEditor.completionRule === 'mandatory-score' ? 1 : 0}
+                    max="100" value={levelEditor.minimumScorePercent}
+                    onChange={(event) => updateLevelEditor('minimumScorePercent', Number(event.target.value))} />
+                </label>
+                <label>شرط فتح المستوى (اختياري)
+                  <select value={levelEditor.unlockAfterLevelId ?? ''}
+                    onChange={(event) => updateLevelEditor('unlockAfterLevelId', event.target.value || null)}>
+                    <option value="">المستوى السابق حسب الترتيب</option>
+                    {levels.filter((item) => item.learningPathKey === levelEditor.learningPathKey
+                      && item.sortOrder < levelEditor.sortOrder
+                      && item.id !== (levelEditor.id ?? levelEditor._id))
+                      .map((item) => <option key={item.id} value={item.id}>{item.sortOrder + 1}. {item.title}</option>)}
+                  </select>
+                </label>
+              </section>
+              <section className="admin-path-editor-section">
+                <h4>مكافأة إكمال المستوى</h4>
+                <div className="admin-path-form-grid">
+                  <label>النجوم
+                    <input type="number" min="0" max="10000"
+                      value={levelEditor.completionReward?.stars ?? gamificationSettings?.levelCompletionStars ?? 20}
+                      onChange={(event) => updateLevelReward('stars', Number(event.target.value))} />
+                  </label>
+                  <label>الشارة
+                    <select value={levelEditor.completionReward?.badgeRewardId ?? ''}
+                      onChange={(event) => updateLevelReward('badgeRewardId', event.target.value || null)}>
+                      <option value="">بدون شارة</option>
+                      {rewards.filter(({ type }) => type === 'badge' && type).map((reward) => (
+                        <option key={reward._id} value={reward._id}>{reward.name}{reward.active ? '' : ' (معطّلة)'}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>هدية افتراضية
+                    <select value={levelEditor.completionReward?.giftRewardId ?? ''}
+                      onChange={(event) => updateLevelReward('giftRewardId', event.target.value || null)}>
+                      <option value="">بدون هدية</option>
+                      {rewards.filter(({ type }) => type === 'gift').map((reward) => (
+                        <option key={reward._id} value={reward._id}>{reward.name}{reward.active ? '' : ' (معطّلة)'}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label><input type="checkbox" checked={levelEditor.rewardsActive}
+                    onChange={(event) => updateLevelEditor('rewardsActive', event.target.checked)} /> تفعيل مكافآت المستوى</label>
+                  <label><input type="checkbox" checked={levelEditor.celebrationEnabled}
+                    onChange={(event) => updateLevelEditor('celebrationEnabled', event.target.checked)} /> عرض احتفال عند الإكمال</label>
+                </div>
+              </section>
+              <aside className="admin-level-child-preview" dir="rtl">
+                {levelEditor.coverImageAssetId && (
+                  <img src={getApiUrl(`/api/v1/admin/assets/${levelEditor.coverImageAssetId}/preview`)} alt="" />
+                )}
+                <span>معاينة خريطة الطفل · المستوى {levelEditor.sortOrder + 1}</span>
+                <h4>{levelEditor.title || 'اسم المستوى'}</h4>
+                <p>{levelEditor.description || 'وصف المغامرة سيظهر للطفل هنا.'}</p>
+                <small>{levelEditor.gameIds.length} ألعاب · {levelEditor.completionReward?.stars ?? 0} نجمة عند الإكمال</small>
+              </aside>
+              <div className="admin-path-editor-footer">
+                <button type="button" className="button button--outline" onClick={() => setLevelEditor(null)}>إلغاء</button>
+                {(levelEditor.id || levelEditor._id) && (
+                  <button type="button" className="button button--outline" disabled={saving} onClick={() => void deleteLevel()}>حذف بأمان</button>
+                )}
+                <button type="submit" className="button button--primary" disabled={saving || levelEditor.gameIds.length === 0}>
+                  {saving ? 'جارٍ الحفظ…' : 'حفظ المستوى'}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="admin-path-no-selection">
+              <h3>مغامرة {paths.find(({ key }) => key === activeLevelPathKey)?.title ?? ''}</h3>
+              <p>{paths.find(({ key }) => key === activeLevelPathKey)?.description ?? 'اختر مسارًا منشورًا أو أنشئ مسارًا جديدًا.'}</p>
+              <button type="button" className="button button--primary" disabled={!activeLevelPathKey}
+                onClick={() => setLevelEditor(emptyLevel(activeLevelPathKey, levels.filter(({ learningPathKey }) => learningPathKey === activeLevelPathKey).length, gamificationSettings?.levelCompletionStars ?? 20))}>
+                إضافة مستوى
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {!loading && tab === 'rewards' && (
+        <div className="admin-gamification-manager">
+          <header className="admin-reward-hero">
+            <span>مركز إدارة المكافآت</span>
+            <h2>النجوم والمكافآت</h2>
+            <p>حدّد متى يكسب الطفل النجوم، ثم أنشئ الشارات والهدايا واربطها بالمستويات. كل مكافأة تُسجّل في سجل واضح.</p>
+          </header>
+          {gamificationSettings && (
+            <form className="admin-dashboard-subpanel" onSubmit={saveRewardSettings}>
+              <div className="admin-reward-section-heading">
+                <span className="admin-reward-step">١</span>
+                <div>
+                  <h3>قواعد كسب النجوم</h3>
+                  <p>هذه القواعد الافتراضية للألعاب، ما لم تضبط مكافأة مختلفة للعبة بعينها.</p>
+                </div>
+              </div>
+              <div className="admin-reward-overview">
+                <article><span aria-hidden="true">⭐</span><strong>{gamificationSettings.completionStars}</strong><small>نجوم إكمال اللعبة</small></article>
+                <article><span aria-hidden="true">🏆</span><strong>+{gamificationSettings.performanceBonusStars}</strong><small>عند تحقيق {gamificationSettings.performanceThresholdPercent}%</small></article>
+                <article><span aria-hidden="true">🚩</span><strong>{gamificationSettings.levelCompletionStars}</strong><small>نجمة لإكمال المستوى</small></article>
+                <article><span aria-hidden="true">🗺️</span><strong>{gamificationSettings.adventureCompletionStars}</strong><small>نجمة لإكمال المغامرة</small></article>
+              </div>
+              <div className="admin-reward-settings-groups">
+                <section className="admin-reward-settings-group">
+                  <h4>مكافأة اللعبة</h4>
+                  <p>تُمنح عند إكمال اللعبة بنجاح. مكافأة أول إكمال تُضاف مرة واحدة فقط.</p>
+                  <div className="admin-path-form-grid">
+                    {[
+                      ['completionStars', 'نجوم إكمال اللعبة'],
+                      ['firstCompletionBonusStars', 'إضافة لأول إكمال']
+                    ].map(([field, label]) => (
+                      <label key={field}>{label}
+                        <input type="number" min="0" max="10000" value={gamificationSettings[field]}
+                          onChange={(event) => updateSettings(field, Number(event.target.value))} />
+                      </label>
+                    ))}
+                  </div>
+                </section>
+                <section className="admin-reward-settings-group">
+                  <h4>مكافأة الأداء المميز</h4>
+                  <p>تُضاف النجوم الإضافية عندما يبلغ الطفل حد الأداء المحدد.</p>
+                  <div className="admin-path-form-grid">
+                    {[
+                      ['performanceBonusStars', 'نجوم إضافية'],
+                      ['performanceThresholdPercent', 'حد الأداء (%)']
+                    ].map(([field, label]) => (
+                      <label key={field}>{label}
+                        <input type="number" min="0" max={field.includes('Percent') ? 100 : 10000}
+                          value={gamificationSettings[field]}
+                          onChange={(event) => updateSettings(field, Number(event.target.value))} />
+                      </label>
+                    ))}
+                  </div>
+                </section>
+                <section className="admin-reward-settings-group">
+                  <h4>مكافآت التقدم</h4>
+                  <p>تُمنح هذه النجوم عند إكمال المستوى أو جميع مستويات المغامرة.</p>
+                  <div className="admin-path-form-grid">
+                    {[
+                      ['levelCompletionStars', 'نجوم إكمال المستوى'],
+                      ['adventureCompletionStars', 'نجوم إكمال المغامرة']
+                    ].map(([field, label]) => (
+                      <label key={field}>{label}
+                        <input type="number" min="0" max="10000" value={gamificationSettings[field]}
+                          onChange={(event) => updateSettings(field, Number(event.target.value))} />
+                      </label>
+                    ))}
+                  </div>
+                </section>
+                <section className="admin-reward-settings-group">
+                  <h4>مكافآت إعادة اللعبة</h4>
+                  <p>تجنّب تكرار النجوم بلا حدود: فعّل الإعادة ثم حدّد سقف المكافآت ووقت الانتظار.</p>
+                  <label className="admin-reward-toggle">
+                    <input type="checkbox" checked={gamificationSettings.repeatRewardsEnabled}
+                      onChange={(event) => updateSettings('repeatRewardsEnabled', event.target.checked)} />
+                    <span><strong>السماح بمكافآت الإعادة</strong><small>تُطبّق على الألعاب التي لا تملك إعدادًا خاصًا.</small></span>
+                  </label>
+                  <div className="admin-path-form-grid">
+                    <label>الحد الأقصى لمكافآت الإعادة
+                      <input type="number" min="0" max="1000" disabled={!gamificationSettings.repeatRewardsEnabled}
+                        value={gamificationSettings.maxRepeatRewardCount}
+                        onChange={(event) => updateSettings('maxRepeatRewardCount', Number(event.target.value))} />
+                    </label>
+                    <label>الانتظار بين المكافآت (دقيقة)
+                      <input type="number" min="0" max="43200" disabled={!gamificationSettings.repeatRewardsEnabled}
+                        value={gamificationSettings.repeatCooldownMinutes}
+                        onChange={(event) => updateSettings('repeatCooldownMinutes', Number(event.target.value))} />
+                    </label>
+                  </div>
+                </section>
+              </div>
+              <div className="admin-path-editor-footer">
+                <button className="button button--primary" disabled={settingsSaving}>
+                  {settingsSaving ? 'جارٍ الحفظ…' : 'حفظ الإعدادات العامة'}
+                </button>
+              </div>
+              <div className="admin-reward-section-heading admin-reward-section-heading--subsection">
+                <span className="admin-reward-step">٢</span>
+                <div><h3>تخصيص مكافأة لعبة</h3><p>أضف استثناءً للعبة محددة؛ الألعاب الأخرى تظل على الإعدادات العامة.</p></div>
+              </div>
+              <label className="admin-reward-game-picker">إضافة لعبة منشورة
+                <select value="" onChange={(event) => addGameRewardRule(event.target.value)}>
+                  <option value="">اختر لعبة لإضافة إعداد خاص…</option>
+                  {availableGames.filter(({ gameId }) => !gamificationSettings.gameRewards.some((rule) => rule.gameId === gameId))
+                    .map((game) => <option value={game.gameId} key={game.gameId}>{game.title}</option>)}
+                </select>
+              </label>
+              {gamificationSettings.gameRewards.map((rule) => (
+                <fieldset className="admin-game-reward-rule" key={rule.gameId}>
+                  <legend>{availableGames.find(({ gameId }) => gameId === rule.gameId)?.title ?? rule.gameId}</legend>
+                  <p>إعدادات هذه اللعبة تستبدل القواعد العامة لها فقط.</p>
+                  <div className="admin-path-form-grid">
+                    {[
+                      ['completionStars', 'نجوم الإكمال'],
+                      ['performanceBonusStars', 'مكافأة الأداء'],
+                      ['performanceThresholdPercent', 'حد الأداء (%)'],
+                      ['firstCompletionBonusStars', 'مكافأة أول مرة'],
+                      ['maxRepeatRewardCount', 'أقصى مرات الإعادة'],
+                      ['repeatCooldownMinutes', 'فترة الانتظار بالدقائق']
+                    ].map(([field, label]) => (
+                      <label key={field}>{label}
+                        <input type="number" min="0" max={field.includes('Percent') ? 100 : field.includes('Count') ? 1000 : 10000}
+                          value={rule[field]} onChange={(event) => updateGameRewardRule(
+                            rule.gameId, field, Number(event.target.value)
+                          )} />
+                      </label>
+                    ))}
+                    <label className="admin-reward-inline-toggle">
+                      <input type="checkbox" checked={rule.repeatRewardsEnabled}
+                        onChange={(event) => updateGameRewardRule(rule.gameId, 'repeatRewardsEnabled', event.target.checked)} />
+                      <span>السماح بمكافأة الإعادة</span>
+                    </label>
+                  </div>
+                  <button type="button" className="button button--small button--outline"
+                    onClick={() => removeGameRewardRule(rule.gameId)}>استخدام الإعداد العام لهذه اللعبة</button>
+                </fieldset>
+              ))}
+            </form>
+          )}
+          <section className="admin-dashboard-subpanel">
+            <div className="admin-dashboard-panel__heading">
+              <div>
+                <span className="admin-reward-step">٣</span>
+                <h3>الشارات والهدايا</h3>
+                <p>أنشئ مكافأة ثم اربطها بمستوى لتُمنح عند إكماله. الصور تُختار من مكتبة الوسائط.</p>
+              </div>
+              <div className="admin-path-editor-footer">
+                <button type="button" className="button button--small button--outline" onClick={() => setRewardEditor(emptyReward('badge'))}>شارة جديدة</button>
+                <button type="button" className="button button--small button--primary" onClick={() => setRewardEditor(emptyReward('gift'))}>هدية جديدة</button>
+              </div>
+            </div>
+            <div className="admin-reward-definition-list">
+              {rewards.map((reward) => (
+                <button type="button" className={`admin-reward-definition${rewardEditor?._id === reward._id ? ' is-selected' : ''}`} key={reward._id}
+                  onClick={() => setRewardEditor({ ...reward })}>
+                  {reward.imageAssetId
+                    ? <img src={getApiUrl(`/api/v1/admin/assets/${reward.imageAssetId}/preview`)} alt="" />
+                    : <span className="admin-reward-definition__placeholder" aria-hidden="true">{reward.type === 'badge' ? '🏅' : '🎁'}</span>}
+                  <span className="admin-reward-definition__copy">
+                    <strong>{reward.name}</strong><small>{reward.type === 'badge' ? 'شارة' : 'هدية افتراضية'} · {reward.category}</small>
+                    <small>{reward.active ? '● نشطة' : '○ متوقفة'}{reward.unlockDescription ? ` · ${reward.unlockDescription}` : ''}</small>
+                  </span>
+                  <span className="admin-reward-definition__edit">تعديل</span>
+                </button>
+              ))}
+              {rewards.length === 0 && <p className="admin-reward-empty">لا توجد مكافآت بعد. ابدأ بإنشاء شارة أو هدية، ثم اربطها بمستوى.</p>}
+            </div>
+            {rewardEditor && (
+              <form className="admin-reward-editor" onSubmit={saveReward}>
+                <div className="admin-reward-section-heading">
+                  <span className="admin-reward-step">✎</span>
+                  <div>
+                    <h4>{rewardEditor._id ? 'تعديل المكافأة' : rewardEditor.type === 'badge' ? 'إنشاء شارة جديدة' : 'إنشاء هدية جديدة'}</h4>
+                    <p>أدخل التفاصيل وشاهد معاينة مبسطة قبل الحفظ.</p>
+                  </div>
+                </div>
+                <div className="admin-reward-editor-layout">
+                <div className="admin-path-form-grid">
+                  <label>النوع
+                    <select value={rewardEditor.type} disabled={Boolean(rewardEditor._id)}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, type: event.target.value })}>
+                      <option value="badge">شارة</option><option value="gift">هدية افتراضية</option>
+                    </select>
+                  </label>
+                  <label>الفئة
+                    <input required maxLength={60} value={rewardEditor.category}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, category: event.target.value })} />
+                  </label>
+                  <label className="admin-path-field--wide">الاسم
+                    <input required maxLength={120} value={rewardEditor.name}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, name: event.target.value })} />
+                  </label>
+                  <label className="admin-path-field--wide">الوصف
+                    <textarea required rows={2} maxLength={500} value={rewardEditor.description}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, description: event.target.value })} />
+                  </label>
+                  <label>الندرة
+                    <select value={rewardEditor.rarity}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, rarity: event.target.value })}>
+                      <option value="common">عادية</option><option value="rare">نادرة</option>
+                      <option value="epic">ملحمية</option><option value="legendary">أسطورية</option>
+                    </select>
+                  </label>
+                  <label>صورة من مكتبة الوسائط
+                    <select value={rewardEditor.imageAssetId ?? ''}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, imageAssetId: event.target.value || null })}>
+                      <option value="">بدون صورة</option>
+                      {mediaAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.displayName}</option>)}
+                    </select>
+                  </label>
+                  <label className="admin-path-field--wide">طريقة الحصول عليها
+                    <input maxLength={300} value={rewardEditor.unlockDescription ?? ''}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, unlockDescription: event.target.value })} />
+                  </label>
+                  <label className="admin-reward-inline-toggle">
+                    <input type="checkbox" checked={rewardEditor.active}
+                      onChange={(event) => setRewardEditor({ ...rewardEditor, active: event.target.checked })} />
+                    <span>المكافأة نشطة</span>
+                  </label>
+                </div>
+                <aside className="admin-reward-preview" aria-label="معاينة المكافأة">
+                  <span>معاينة</span>
+                  {rewardEditor.imageAssetId
+                    ? <img src={getApiUrl(`/api/v1/admin/assets/${rewardEditor.imageAssetId}/preview`)} alt="" />
+                    : <strong className="admin-reward-preview__placeholder">{rewardEditor.type === 'badge' ? '🏅' : '🎁'}</strong>}
+                  <h5>{rewardEditor.name || 'اسم المكافأة'}</h5>
+                  <p>{rewardEditor.description || 'سيظهر وصف المكافأة هنا.'}</p>
+                  <small>{rewardEditor.type === 'badge' ? 'شارة' : 'هدية افتراضية'} · {rewardEditor.rarity}</small>
+                  {rewardEditor.unlockDescription && <small>طريقة الحصول: {rewardEditor.unlockDescription}</small>}
+                </aside>
+                </div>
+                <div className="admin-path-editor-footer">
+                  <button type="button" className="button button--outline" onClick={() => setRewardEditor(null)}>إلغاء</button>
+                  {rewardEditor._id && <button type="button" className="button button--outline" disabled={saving} onClick={() => void deleteReward()}>حذف بأمان</button>}
+                  <button type="submit" className="button button--primary" disabled={saving}>{saving ? 'جارٍ الحفظ…' : 'حفظ المكافأة'}</button>
+                </div>
+              </form>
+            )}
+          </section>
+          <section className="admin-dashboard-subpanel">
+            <div className="admin-reward-section-heading">
+              <span className="admin-reward-step">٤</span>
+              <div><h3>أرصدة الأطفال وسجل المكافآت</h3><p>ابحث عن طفل لمراجعة رصيده والمعاملات التي كوّنته.</p></div>
+            </div>
+            <form className="admin-reward-child-search" onSubmit={searchRewardHistory}>
+              <label>البحث باسم الطفل
+                <input required minLength={2} maxLength={50} value={rewardSearchText}
+                  onChange={(event) => setRewardSearchText(event.target.value)} />
+              </label>
+              <button type="submit" className="button button--small button--outline">بحث</button>
+            </form>
+            {rewardChildren.length > 0 && (
+              <div className="admin-reward-child-results">
+                {rewardChildren.map((child) => (
+                  <button type="button" key={child.id}
+                    className={selectedRewardChild?.id === child.id ? 'is-selected' : ''}
+                    onClick={() => void selectRewardChild(child)}>{child.displayName}</button>
+                ))}
+              </div>
+            )}
+            {selectedRewardChild && (
+              <>
+                <div className="admin-child-star-balance">
+                  <strong>{selectedRewardChild.displayName}</strong>
+                  <span>{rewardSummary?.totalStars ?? 0} نجمة</span>
+                  <small>{rewardSummary?.badges.length ?? 0} شارات · {rewardSummary?.gifts.length ?? 0} هدايا</small>
+                </div>
+                <label>نوع المعاملة
+                  <select value={rewardHistoryType} onChange={(event) => setRewardHistoryType(event.target.value)}>
+                    <option value="">كل المكافآت</option><option value="stars">نجوم</option>
+                    <option value="badge">شارات</option><option value="gift">هدايا</option>
+                  </select>
+                </label>
+                <button type="button" className="button button--small button--outline"
+                  onClick={() => void selectRewardChild(selectedRewardChild)}>تحديث السجل</button>
+                <div className="admin-reward-history">
+                  {rewardHistory.map((item) => (
+                    <article key={item.id}>
+                      <strong>{item.rewardName ?? (item.rewardType === 'stars' ? 'نجوم' : item.rewardType === 'badge' ? 'شارة' : 'هدية')}</strong>
+                      <span>{item.quantity} · {item.rewardType}</span>
+                      <small>المصدر: {item.sourceGameId ?? item.sourceLevelId ?? item.learningPathKey ?? '—'} · {new Date(item.awardedAt).toLocaleString('ar')}</small>
+                      <small>رصيد الطفل: {item.totalStars} نجمة · مرجع: {item.transactionReference}</small>
+                    </article>
+                  ))}
+                  {rewardHistory.length === 0 && <p>لا توجد معاملات مكافآت لهذا الطفل.</p>}
+                </div>
+              </>
+            )}
+            <p className="dashboard-privacy-note">تعديل الرصيد يدويًا غير متاح؛ الأرصدة تعتمد على سجل معاملات المكافآت غير القابل للاستبدال.</p>
+          </section>
         </div>
       )}
       {!loading && tab === 'questionnaire' && questionnaire && (

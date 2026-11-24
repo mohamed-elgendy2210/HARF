@@ -1,0 +1,2977 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { apiRequest, getApiUrl } from '../lib/api.js';
+import { displayNameOrFallback } from '../lib/displayName.js';
+import NotificationCenter from './NotificationCenter.jsx';
+import NotificationBell from './NotificationBell.jsx';
+import ParentTestimonials from './ParentTestimonials.jsx';
+import AppointmentMeeting, { AppointmentJoinButton } from './appointments/AppointmentMeeting.jsx';
+
+const ageBands = [
+  { value: '', label: 'يفضل عدم المشاركة' },
+  { value: '3-5', label: '٣–٥ سنوات' },
+  { value: '6-8', label: '٦–٨ سنوات' },
+  { value: '9-12', label: '٩–١٢ سنة' },
+  { value: '13+', label: '١٣ سنة فأكثر' }
+];
+
+const avatars = [
+  { value: '', label: 'بدون صورة رمزية', emoji: '🧒' },
+  { value: 'cat', label: 'قطة', emoji: '🐱' },
+  { value: 'fox', label: 'ثعلب', emoji: '🦊' },
+  { value: 'panda', label: 'باندا', emoji: '🐼' },
+  { value: 'turtle', label: 'سلحفاة', emoji: '🐢' }
+];
+
+const consentLabels = {
+  learning_data: 'حفظ أنشطة التعلّم',
+  progress_reports: 'إعداد تقارير التقدم'
+};
+
+const gameNames = {
+  'word-sounds': 'فقاعات الأصوات',
+  'word-match': 'صندوق الكلمات',
+  'spatial-relationships': 'فين المكان؟',
+  'matching-pairs': 'لعبة توصيل الصور',
+  'animal-sounds': 'اسمع صوت الحيوان'
+};
+
+const learningSkillLabels = {
+  communication: 'التواصل',
+  vocabulary: 'المفردات',
+  expression: 'التعبير',
+  listening: 'الاستماع',
+  'visual-recognition': 'التعرّف البصري',
+  attention: 'الانتباه',
+  'sound-awareness': 'الوعي بالأصوات'
+};
+
+const sections = [
+  { id: 'overview', label: 'الرئيسية', icon: '⌂' },
+  { id: 'children', label: 'أطفالي', icon: '♧' },
+  { id: 'addChild', label: 'إضافة طفل', icon: '+' },
+  { id: 'progress', label: 'التقدم', icon: '↗' },
+  { id: 'activity', label: 'سجل الأنشطة', icon: '◷' },
+  { id: 'reports', label: 'التقارير', icon: '▤' },
+  { id: 'specialists', label: 'الأخصائيون والمواعيد', icon: '✚' },
+  { id: 'appointments', label: 'سجل المواعيد', icon: '▦' },
+  { id: 'payments', label: 'الاشتراك والدفع', icon: 'ج.م' },
+  { id: 'notifications', label: 'الإشعارات', icon: '♧' },
+  { id: 'testimonials', label: 'آرائي عن حرف', icon: '♡' },
+  { id: 'accountProfile', label: 'الملف الشخصي', icon: '♙' },
+  { id: 'settings', label: 'إعدادات الحساب', icon: '⚙' }
+];
+const sectionTitles = Object.fromEntries(sections.map(({ id, label }) => [id, label]));
+const APPOINTMENT_DAYS_PER_PAGE = 3;
+
+function avatarFor(value) {
+  return avatars.find((avatar) => avatar.value === value)?.emoji ?? '🧒';
+}
+
+function formatDate(value) {
+  if (!value) return 'التاريخ غير متاح';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'التاريخ غير متاح';
+  return new Intl.DateTimeFormat('ar-EG', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(date);
+}
+
+function appointmentRequestTimestamp(appointment) {
+  const requestedAt = Date.parse(appointment.requestedAt ?? '');
+  if (Number.isFinite(requestedAt)) return requestedAt;
+  const startsAt = Date.parse(appointment.startsAt ?? '');
+  return Number.isFinite(startsAt) ? startsAt : 0;
+}
+
+function appointmentHistoryCategory(appointment) {
+  if (appointment.status === 'rejected' || appointment.payment?.status === 'rejected') return 'rejected';
+  if (appointment.status === 'awaiting_payment' || appointment.payment?.status === 'awaiting_payment') return 'awaiting_payment';
+  if (appointment.status === 'payment_under_review' || appointment.payment?.status === 'pending_verification') return 'under_review';
+  if (appointment.status === 'accepted' || appointment.payment?.status === 'approved') return 'confirmed';
+  if (appointment.status === 'pending') return 'pending';
+  if (appointment.status === 'expired' || appointment.payment?.status === 'expired') return 'expired';
+  return 'other';
+}
+
+function dateKeyInTimeZone(value, timeZone) {
+  const options = { year: 'numeric', month: '2-digit', day: '2-digit' };
+  if (timeZone) options.timeZone = timeZone;
+  const parts = new Intl.DateTimeFormat('en-CA', options).formatToParts(new Date(value));
+  const dateParts = Object.fromEntries(parts
+    .filter(({ type }) => type !== 'literal')
+    .map(({ type, value: partValue }) => [type, partValue]));
+  return `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+}
+
+function formatAppointmentDate(value, timeZone) {
+  const options = { dateStyle: 'full' };
+  if (timeZone) options.timeZone = timeZone;
+  return new Intl.DateTimeFormat('ar-EG', options).format(new Date(value));
+}
+
+function formatAppointmentTime(value, timeZone) {
+  const options = { timeStyle: 'short' };
+  if (timeZone) options.timeZone = timeZone;
+  return new Intl.DateTimeFormat('ar-EG', options).format(new Date(value));
+}
+
+function ProgressNotice({ children }) {
+  return <div className="dashboard-empty-state">{children}</div>;
+}
+
+function summarizeProgressActivities(paths = []) {
+  const activities = paths.flatMap((path) => path.activities ?? []);
+  const completed = activities.filter(({ status }) => status === 'completed').length;
+  const skills = new Map();
+  for (const activity of activities) {
+    for (const skillId of activity.skillIds ?? []) {
+      const label = learningSkillLabels[skillId];
+      if (!label) continue;
+      const current = skills.get(skillId) ?? { id: skillId, label, activities: 0, completed: 0, attempts: 0 };
+      current.activities += 1;
+      current.attempts += activity.attemptCount ?? 0;
+      if (activity.status === 'completed') current.completed += 1;
+      skills.set(skillId, current);
+    }
+  }
+  return {
+    completed,
+    total: activities.length,
+    completionPercent: activities.length ? Math.round((completed / activities.length) * 100) : null,
+    skills: [...skills.values()]
+      .map((skill) => ({ ...skill, completionPercent: Math.round((skill.completed / skill.activities) * 100) }))
+      .sort((left, right) => right.completionPercent - left.completionPercent || left.label.localeCompare(right.label, 'ar'))
+  };
+}
+
+function getPerformanceChartPoints(buckets = []) {
+  const left = 64;
+  const right = 744;
+  const top = 24;
+  const bottom = 226;
+  return buckets.map((bucket, index) => ({
+    ...bucket,
+    x: buckets.length === 1 ? (left + right) / 2 : left + (index * (right - left)) / (buckets.length - 1),
+    y: bottom - (Math.max(0, Math.min(100, bucket.averageScore)) / 100) * (bottom - top)
+  }));
+}
+
+function performanceChartPath(points) {
+  if (points.length < 2) return '';
+  return points.slice(1).reduce((path, point, index) => {
+    const previous = points[index];
+    const delta = point.x - previous.x;
+    return `${path} C ${previous.x + delta / 3} ${previous.y}, ${previous.x + (delta * 2) / 3} ${point.y}, ${point.x} ${point.y}`;
+  }, `M ${points[0].x} ${points[0].y}`);
+}
+
+function formatPerformanceDate(value, period) {
+  return new Intl.DateTimeFormat('ar-EG', {
+    day: 'numeric',
+    month: 'short',
+    ...(period === 'weekly' ? { weekday: 'short' } : {})
+  }).format(new Date(value));
+}
+
+export default function ParentDashboard({
+  user,
+  onBack,
+  backLabel = 'العودة للحساب',
+  onPasswordRecovery,
+  onSignOut,
+  onReauthenticate,
+  onProfileUpdated
+}) {
+  const [children, setChildren] = useState([]);
+  const [pendingRegistrations, setPendingRegistrations] = useState([]);
+  const [childAllowance, setChildAllowance] = useState(null);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [section, setSection] = useState(() => {
+    const requestedSection = new URLSearchParams(window.location.search).get('section');
+    return sections.some(({ id }) => id === requestedSection) ? requestedSection : 'overview';
+  });
+  const [selectedChildId, setSelectedChildId] = useState('');
+  const [editingChild, setEditingChild] = useState(null);
+  const [childRegistration, setChildRegistration] = useState(null);
+  const [registrationRequestId, setRegistrationRequestId] = useState('');
+  const [registrationConsent, setRegistrationConsent] = useState(false);
+  const [registrationDraftSaving, setRegistrationDraftSaving] = useState(false);
+  const registrationDraftSaveQueue = useRef(Promise.resolve());
+  const registrationDraftSaveCount = useRef(0);
+  const [consentChildId, setConsentChildId] = useState('');
+  const [consents, setConsents] = useState([]);
+  const [attempts, setAttempts] = useState([]);
+  const [attemptTotal, setAttemptTotal] = useState(0);
+  const [hasMoreAttempts, setHasMoreAttempts] = useState(false);
+  const [attemptPage, setAttemptPage] = useState(1);
+  const [gameFilter, setGameFilter] = useState('');
+  const [learningProgress, setLearningProgress] = useState(null);
+  const [loadingLearningProgress, setLoadingLearningProgress] = useState(false);
+  const [learningProgressMessage, setLearningProgressMessage] = useState('');
+  const [learningRefresh, setLearningRefresh] = useState(0);
+  const [learningJourney, setLearningJourney] = useState(null);
+  const [progressAnalytics, setProgressAnalytics] = useState(null);
+  const [progressPeriod, setProgressPeriod] = useState('weekly');
+  const [performanceGameId, setPerformanceGameId] = useState('');
+  const [loadingProgressAnalytics, setLoadingProgressAnalytics] = useState(false);
+  const [progressAnalyticsError, setProgressAnalyticsError] = useState('');
+  const [rewardSummary, setRewardSummary] = useState(null);
+  const [learningSetup, setLearningSetup] = useState(null);
+  const [learningSetupBusy, setLearningSetupBusy] = useState(false);
+  const [subscription, setSubscription] = useState(null);
+  const [subscriptionHistory, setSubscriptionHistory] = useState([]);
+  const [paymentHistory, setPaymentHistory] = useState([]);
+  const [subscriptionPlan, setSubscriptionPlan] = useState(null);
+  const [billingPeriod, setBillingPeriod] = useState(() => new URLSearchParams(window.location.search).get('period') === 'annual' ? 'annual' : 'monthly');
+  const [specialists, setSpecialists] = useState([]);
+  const [selectedSpecialistId, setSelectedSpecialistId] = useState('');
+  const [visibleAppointmentDays, setVisibleAppointmentDays] = useState(APPOINTMENT_DAYS_PER_PAGE);
+  const [specialistAvailability, setSpecialistAvailability] = useState(null);
+  const [loadingSpecialists, setLoadingSpecialists] = useState(false);
+  const [loadingAvailability, setLoadingAvailability] = useState(false);
+  const [loadingAppointments, setLoadingAppointments] = useState(false);
+  const [appointments, setAppointments] = useState([]);
+  const [reportDateFilter, setReportDateFilter] = useState('');
+  const [appointmentClock, setAppointmentClock] = useState(Date.now());
+  const [busySpecialistNoShowId, setBusySpecialistNoShowId] = useState('');
+  const [appointmentFilter, setAppointmentFilter] = useState('all');
+  const [meetingAppointment, setMeetingAppointment] = useState(null);
+  const [bookingSlotStartsAt, setBookingSlotStartsAt] = useState('');
+  const [selectedSessionPaymentId, setSelectedSessionPaymentId] = useState('');
+  const [sessionPaymentDetails, setSessionPaymentDetails] = useState(null);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
+  const [paymentReceiptFile, setPaymentReceiptFile] = useState(null);
+  const [paymentReceiptPreview, setPaymentReceiptPreview] = useState('');
+  const [loadingSessionPayment, setLoadingSessionPayment] = useState(false);
+  const [submittingSessionPayment, setSubmittingSessionPayment] = useState(false);
+  const [loadingBilling, setLoadingBilling] = useState(false);
+  const [loadingChildren, setLoadingChildren] = useState(true);
+  const [loadingAttempts, setLoadingAttempts] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [profileName, setProfileName] = useState(user.parentProfile?.displayName ?? '');
+
+  useEffect(() => {
+    if (section !== 'appointments') return undefined;
+    const timer = window.setInterval(() => setAppointmentClock(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [section]);
+
+  useEffect(() => {
+    setProfileName(user.parentProfile?.displayName ?? '');
+  }, [user.parentProfile?.displayName]);
+
+  const clearError = () => {
+    setError('');
+    setSessionExpired(false);
+  };
+
+  const reportError = (requestError) => {
+    setSessionExpired(requestError.status === 401);
+    setError(requestError.status === 401
+      ? 'انتهت جلسة الدخول. سجّل الدخول مجددًا للمتابعة.'
+      : requestError.message);
+  };
+
+  const selectedChild = useMemo(
+    () => children.find((child) => child.id === selectedChildId) ?? null,
+    [children, selectedChildId]
+  );
+
+  const loadChildren = async () => {
+    setLoadingChildren(true);
+    clearError();
+    try {
+      const [result, pendingResult, allowanceResult] = await Promise.all([
+        apiRequest('/api/v1/children'),
+        apiRequest('/api/v1/children/registrations/pending'),
+        apiRequest('/api/v1/children/allowance')
+      ]);
+      setChildren(result.children);
+      setPendingRegistrations(pendingResult.registrations);
+      setChildAllowance(allowanceResult.allowance);
+      setSelectedChildId((current) => (
+        result.children.some((child) => child.id === current)
+          ? current
+          : result.children.some((child) => child.id === new URLSearchParams(window.location.search).get('childId'))
+            ? new URLSearchParams(window.location.search).get('childId')
+            : result.children[0]?.id ?? ''
+      ));
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLoadingChildren(false);
+    }
+  };
+
+  const refreshChildAllowance = async () => {
+    try {
+      const { allowance } = await apiRequest('/api/v1/children/allowance');
+      setChildAllowance(allowance);
+    } catch (requestError) {
+      reportError(requestError);
+    }
+  };
+
+  useEffect(() => {
+    loadChildren();
+  }, []);
+
+  useEffect(() => {
+    if (!childRegistration?.child?.id || !childRegistration.questionnaire?.version) return undefined;
+    const timer = window.setTimeout(async () => {
+      const saveDraft = () => apiRequest(`/api/v1/children/${childRegistration.child.id}/registration-draft`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionnaireVersion: childRegistration.questionnaire.version,
+          submissionId: childRegistration.submissionId,
+          answers: childRegistration.answers,
+          step: childRegistration.step
+        })
+      });
+      const saveRequest = registrationDraftSaveQueue.current.then(saveDraft, saveDraft);
+      registrationDraftSaveQueue.current = saveRequest;
+      registrationDraftSaveCount.current += 1;
+      setRegistrationDraftSaving(true);
+      try {
+        await saveRequest;
+      } catch (requestError) {
+        reportError(requestError);
+      } finally {
+        registrationDraftSaveCount.current -= 1;
+        setRegistrationDraftSaving(registrationDraftSaveCount.current > 0);
+      }
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [childRegistration?.child?.id, childRegistration?.questionnaire?.version,
+    childRegistration?.submissionId, childRegistration?.answers, childRegistration?.step]);
+
+  useEffect(() => {
+    if (!selectedChildId || !['progress', 'activity'].includes(section)) {
+      setAttempts([]);
+      setAttemptTotal(0);
+      setHasMoreAttempts(false);
+      return undefined;
+    }
+
+    let active = true;
+    setLoadingAttempts(true);
+    clearError();
+    const query = new URLSearchParams({ page: String(attemptPage), limit: '10' });
+    if (section === 'activity' && gameFilter) query.set('gameId', gameFilter);
+    apiRequest(`/api/v1/children/${selectedChildId}/game-attempts?${query}`)
+      .then((result) => {
+        if (!active) return;
+        setAttempts(result.attempts);
+        setAttemptTotal(result.total);
+        setHasMoreAttempts(result.hasMore);
+      })
+      .catch((requestError) => {
+        if (active) reportError(requestError);
+      })
+      .finally(() => {
+        if (active) setLoadingAttempts(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [selectedChildId, section, attemptPage, gameFilter]);
+
+  useEffect(() => {
+    if (section !== 'progress' || !selectedChildId) {
+      setLearningProgress(null);
+      setLearningProgressMessage('');
+      return undefined;
+    }
+    let active = true;
+    setLoadingLearningProgress(true);
+    setLearningProgressMessage('');
+    apiRequest(`/api/v1/children/${selectedChildId}/learning-progress`)
+      .then(({ progress }) => {
+        if (active) setLearningProgress(progress);
+      })
+      .catch((requestError) => {
+        if (!active) return;
+        setLearningProgress(null);
+        setLearningProgressMessage(requestError.status === 403
+          ? requestError.message
+          : requestError.message || 'تعذر تحميل مسار التعلّم.');
+        if (requestError.status === 401) reportError(requestError);
+      })
+      .finally(() => {
+        if (active) setLoadingLearningProgress(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedChildId, section, learningRefresh]);
+
+  useEffect(() => {
+    if (section !== 'progress' || !selectedChildId) {
+      setLearningJourney(null);
+      setRewardSummary(null);
+      return undefined;
+    }
+    let active = true;
+    setLearningJourney(null);
+    setRewardSummary(null);
+    Promise.all([
+      apiRequest(`/api/v1/children/${selectedChildId}/learning-journey`),
+      apiRequest(`/api/v1/children/${selectedChildId}/rewards`)
+    ]).then(([journey, rewards]) => {
+      if (!active) return;
+      setLearningJourney(journey);
+      setRewardSummary(rewards);
+    }).catch(() => {
+      if (active) {
+        setLearningJourney(null);
+        setRewardSummary(null);
+      }
+    });
+    return () => { active = false; };
+  }, [selectedChildId, section, learningRefresh]);
+
+  useEffect(() => {
+    if (section !== 'progress' || !selectedChildId) {
+      setProgressAnalytics(null);
+      setProgressAnalyticsError('');
+      return undefined;
+    }
+    let active = true;
+    setLoadingProgressAnalytics(true);
+    setProgressAnalyticsError('');
+    setProgressAnalytics(null);
+    const query = new URLSearchParams({ period: progressPeriod });
+    if (performanceGameId) query.set('gameId', performanceGameId);
+    apiRequest(`/api/v1/children/${selectedChildId}/progress-analytics?${query}`)
+      .then(({ analytics }) => {
+        if (!active) return;
+        setProgressAnalytics(analytics);
+        const availableGames = analytics.games ?? [];
+        if (performanceGameId && !availableGames.some(({ gameId }) => gameId === performanceGameId)) {
+          setPerformanceGameId(availableGames[0]?.gameId ?? '');
+        } else if (!performanceGameId && availableGames.length > 0) {
+          setPerformanceGameId(availableGames[0].gameId);
+        }
+      })
+      .catch((requestError) => {
+        if (!active) return;
+        setProgressAnalytics(null);
+        setProgressAnalyticsError(requestError.message || 'تعذر تحميل بيانات الأداء.');
+      })
+      .finally(() => {
+        if (active) setLoadingProgressAnalytics(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedChildId, section, progressPeriod, performanceGameId]);
+
+  useEffect(() => {
+    if (section !== 'payments') return undefined;
+    let active = true;
+    setLoadingBilling(true);
+    Promise.all([
+      apiRequest('/api/v1/auth/subscription'),
+      apiRequest('/api/v1/payments/plan')
+    ])
+      .then(([billing, { plan }]) => {
+        if (!active) return;
+        setSubscription(billing.subscription);
+        setSubscriptionHistory(billing.history);
+        setPaymentHistory(billing.payments);
+        setSubscriptionPlan(plan);
+        if (!plan.annualAmountMinor) setBillingPeriod('monthly');
+      })
+      .catch((requestError) => {
+        if (active) reportError(requestError);
+      })
+      .finally(() => {
+        if (active) setLoadingBilling(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [section]);
+
+  const submitPayment = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    setBusy(true);
+    clearError();
+    setNotice('');
+    try {
+      await apiRequest('/api/v1/payments', {
+        method: 'POST',
+        body: formData
+      });
+      const billing = await apiRequest('/api/v1/auth/subscription');
+      setSubscription(billing.subscription);
+      setSubscriptionHistory(billing.history);
+      setPaymentHistory(billing.payments);
+      setNotice('تم إرسال طلب الدفع للمراجعة. لن يتفعّل الاشتراك قبل موافقة المسؤول.');
+      form.reset();
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (section !== 'specialists') return undefined;
+    let active = true;
+    setLoadingSpecialists(true);
+    apiRequest('/api/v1/directory/specialists')
+      .then(({ specialists: directory }) => {
+        if (!active) return;
+        setSpecialists(directory);
+        setSelectedSpecialistId('');
+      })
+      .catch((requestError) => {
+        if (active) reportError(requestError);
+      })
+      .finally(() => {
+        if (active) setLoadingSpecialists(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== 'specialists' || !selectedSpecialistId) {
+      setSpecialistAvailability(null);
+      return undefined;
+    }
+    let active = true;
+    setSpecialistAvailability(null);
+    setLoadingAvailability(true);
+    const query = new URLSearchParams({ from: new Date().toISOString(), days: '14' });
+    apiRequest(`/api/v1/directory/specialists/${selectedSpecialistId}/availability?${query}`)
+      .then(({ availability }) => {
+        if (active) setSpecialistAvailability(availability);
+      })
+      .catch((requestError) => {
+        if (active) reportError(requestError);
+      })
+      .finally(() => {
+        if (active) setLoadingAvailability(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [section, selectedSpecialistId]);
+
+  useEffect(() => {
+    if (!['appointments', 'reports'].includes(section)) return undefined;
+    let active = true;
+    setLoadingAppointments(true);
+    apiRequest('/api/v1/appointments')
+      .then(({ appointments: history }) => {
+        if (active) setAppointments(history);
+      })
+      .catch((requestError) => {
+        if (active) reportError(requestError);
+      })
+      .finally(() => {
+        if (active) setLoadingAppointments(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== 'appointments') return;
+    const appointmentId = new URLSearchParams(window.location.search).get('appointmentId');
+    const appointment = appointments.find((item) => item.id === appointmentId && item.status === 'accepted');
+    if (appointment) {
+      const location = new URL(window.location.href);
+      location.searchParams.delete('appointmentId');
+      window.history.replaceState(window.history.state, '', location);
+      setMeetingAppointment(appointment);
+    }
+  }, [appointments, section]);
+
+  const bookAppointment = async (slot) => {
+    const activeChild = children.find((child) => child.id === selectedChildId && child.status === 'active')
+      ?? children.find((child) => child.status === 'active');
+    if (!activeChild) {
+      setError('اختر ملف طفل نشطًا قبل طلب الموعد.');
+      return;
+    }
+    setSelectedChildId(activeChild.id);
+    setBookingSlotStartsAt(slot.startsAt);
+    clearError();
+    setNotice('');
+    try {
+      const { appointment } = await apiRequest('/api/v1/appointments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          childId: activeChild.id,
+          specialistId: selectedSpecialistId,
+          startsAt: slot.startsAt
+        })
+      });
+      setNotice(`تم إرسال طلب الموعد لـ ${activeChild.displayName}. ينتهي الطلب عند موعد الجلسة أو بعد ٤٨ ساعة من إرساله، أيهما أقرب.`);
+      setAppointments((current) => [appointment, ...current.filter(({ id }) => id !== appointment.id)]);
+      selectSection('appointments');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBookingSlotStartsAt('');
+    }
+  };
+
+  const formatAppointmentPrice = (amountMinor, currency = 'EGP') => new Intl.NumberFormat('ar-EG', {
+    style: 'currency',
+    currency
+  }).format(amountMinor / 100);
+
+  const appointmentStatuses = {
+    pending: 'بانتظار رد الأخصائي',
+    awaiting_payment: 'في انتظار الدفع',
+    payment_under_review: 'إيصال الدفع قيد المراجعة',
+    accepted: 'تم تأكيد الموعد',
+    rejected: 'مرفوض',
+    expired: 'انتهت مهلة الرد'
+  };
+  const orderedAppointments = useMemo(() => [...appointments].sort(
+    (first, second) => appointmentRequestTimestamp(second) - appointmentRequestTimestamp(first)
+  ), [appointments]);
+  const filteredAppointments = appointmentFilter === 'all'
+    ? orderedAppointments
+    : orderedAppointments.filter((appointment) => appointmentHistoryCategory(appointment) === appointmentFilter);
+  const appointmentTabs = [
+    { id: 'all', label: 'الكل' },
+    { id: 'confirmed', label: 'مؤكدة' },
+    { id: 'awaiting_payment', label: 'بانتظار الدفع' },
+    { id: 'rejected', label: 'مرفوضة' },
+    { id: 'under_review', label: 'قيد مراجعة الدفع' },
+    { id: 'pending', label: 'بانتظار رد الأخصائي' },
+    { id: 'expired', label: 'منتهية' },
+    { id: 'other', label: 'أخرى' }
+  ];
+
+  const showSessionPayment = async (appointmentId) => {
+    setSelectedSessionPaymentId(appointmentId);
+    setSessionPaymentDetails(null);
+    setPaymentReceiptFile(null);
+    setLoadingSessionPayment(true);
+    clearError();
+    try {
+      const { paymentDetails } = await apiRequest(`/api/v1/appointments/${appointmentId}/payment`);
+      setSessionPaymentDetails(paymentDetails);
+      setSelectedPaymentMethod((current) => current && paymentDetails.methods[current]
+        ? current
+        : Object.keys(paymentDetails.methods)[0] ?? '');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLoadingSessionPayment(false);
+    }
+  };
+
+  const submitSessionPayment = async (event, appointment) => {
+    event.preventDefault();
+    if (!paymentReceiptFile) {
+      setError('ارفع صورة إيصال التحويل قبل الإرسال.');
+      return;
+    }
+    if (!selectedPaymentMethod) {
+      setError('اختر طريقة الدفع أولًا.');
+      return;
+    }
+    const formData = new FormData();
+    formData.set('method', selectedPaymentMethod);
+    formData.set('receipt', paymentReceiptFile);
+    setSubmittingSessionPayment(true);
+    clearError();
+    setNotice('');
+    try {
+      const { payment } = await apiRequest(`/api/v1/appointments/${appointment.id}/payment`, {
+        method: 'POST',
+        body: formData
+      });
+      setAppointments((current) => current.map((item) => item.id === appointment.id
+        ? { ...item, status: 'payment_under_review', payment }
+        : item));
+      setSelectedSessionPaymentId('');
+      setSessionPaymentDetails(null);
+      setPaymentReceiptFile(null);
+      setNotice('تم إرسال الإيصال، والدفع الآن قيد المراجعة الإدارية.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setSubmittingSessionPayment(false);
+    }
+  };
+
+  const reportSpecialistNoShow = async (appointment) => {
+    if (!window.confirm('هل تريد إبلاغ الأخصائي بعدم حضوره للموعد؟ سيتم تسجيل البلاغ في سجل الموعد وإشعار الأخصائي.')) return;
+    setBusySpecialistNoShowId(appointment.id);
+    clearError();
+    setNotice('');
+    try {
+      const { appointment: updatedAppointment } = await apiRequest(
+        `/api/v1/appointments/${appointment.id}/session/specialist-no-show`,
+        { method: 'POST' }
+      );
+      setAppointments((current) => current.map((item) => item.id === appointment.id
+        ? updatedAppointment
+        : item));
+      setNotice('تم تسجيل بلاغ عدم حضور الأخصائي وإشعاره.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusySpecialistNoShowId('');
+    }
+  };
+
+  useEffect(() => {
+    if (!paymentReceiptFile) {
+      setPaymentReceiptPreview('');
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(paymentReceiptFile);
+    setPaymentReceiptPreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [paymentReceiptFile]);
+
+  useEffect(() => {
+    if (!selectedChildId || !['reports', 'profile', 'progress'].includes(section)) return undefined;
+    let active = true;
+    apiRequest(`/api/v1/children/${selectedChildId}/consents`)
+      .then((result) => {
+        if (active) setConsents(result.consents);
+      })
+      .catch((requestError) => {
+        if (active) reportError(requestError);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedChildId, section]);
+
+  useEffect(() => {
+    setLearningSetup(null);
+  }, [selectedChildId]);
+
+  const startCreate = () => {
+    if (!childAllowance?.canAddChild) {
+      setError(childAllowance?.subscriptionStatus === 'active'
+        ? 'وصلت إلى الحد الأقصى لعدد الأطفال المسموح به في اشتراكك.'
+        : 'يلزم اشتراك نشط لإضافة ملف طفل.');
+      return;
+    }
+    setEditingChild(null);
+    setChildRegistration(null);
+    setRegistrationConsent(false);
+    const requestId = window.crypto.randomUUID();
+    window.sessionStorage.setItem('harf-child-registration-request', requestId);
+    setRegistrationRequestId(requestId);
+    clearError();
+    setNotice('');
+    setSection('addChild');
+  };
+
+  const beginChildRegistration = async (child, draft = null) => {
+    setChildRegistration({
+      child,
+      questionnaire: null,
+      answers: draft?.answers ?? {},
+      submissionId: draft?.submissionId ?? window.crypto.randomUUID(),
+      step: draft?.step === 'needs_review' ? 'needs_review'
+        : draft?.step === 'review' ? 'review' : 'questionnaire',
+      recommendations: null,
+      selectedPathKeys: []
+    });
+    setRegistrationConsent(false);
+    setSection('addChild');
+    clearError();
+    setNotice('');
+    try {
+      const { questionnaire } = await apiRequest(
+        `/api/v1/children/${child.id}/learning-questionnaire`
+      );
+      const isDraftCurrent = draft?.questionnaireVersion === questionnaire.version;
+      setChildRegistration((current) => current?.child.id === child.id ? ({
+        ...current,
+        questionnaire,
+        answers: isDraftCurrent ? draft.answers ?? {} : {},
+        submissionId: isDraftCurrent && draft.submissionId
+          ? draft.submissionId
+          : window.crypto.randomUUID(),
+        step: isDraftCurrent && draft.step === 'needs_review' ? 'needs_review'
+          : isDraftCurrent && draft.step === 'review' ? 'review' : 'questionnaire'
+      }) : current);
+      if (draft?.questionnaireVersion && !isDraftCurrent) {
+        setNotice('تم تحديث الاستبيان منذ آخر مرة. ابدأ بالإصدار الحالي، وستظل بيانات المسودة السابقة محفوظة دون خلط الإصدارات.');
+      }
+    } catch (requestError) {
+      reportError(requestError);
+    }
+  };
+
+  const resumeChildRegistration = (child) => {
+    void beginChildRegistration(child, child.registrationDraft);
+  };
+
+  const setChildRegistrationAnswer = (question, optionId, checked = true) => {
+    setChildRegistration((current) => {
+      if (!current) return current;
+      const answers = { ...current.answers };
+      if (question.type === 'multiple') {
+        const selected = new Set(answers[question.id] ?? []);
+        if (checked) selected.add(optionId);
+        else selected.delete(optionId);
+        if (selected.size) answers[question.id] = [...selected];
+        else delete answers[question.id];
+      } else {
+        answers[question.id] = optionId;
+      }
+      return {
+        ...current,
+        answers,
+        submissionId: window.crypto.randomUUID(),
+        step: 'questionnaire',
+        recommendations: null,
+        selectedPathKeys: []
+      };
+    });
+  };
+
+  const registrationQuestionsComplete = (registration) => (
+    registration?.questionnaire?.questions.every((question) => {
+      const answer = registration.answers[question.id];
+      if (!question.required) return true;
+      return question.type === 'multiple'
+        ? Array.isArray(answer) && answer.length > 0
+        : typeof answer === 'string' && answer.length > 0;
+    }) ?? false
+  );
+
+  const questionnaireAnswersComplete = (questionnaire, answers) => (
+    questionnaire.questions.every((question) => {
+      const answer = answers[question.id];
+      if (!question.required) return true;
+      return question.type === 'multiple'
+        ? Array.isArray(answer) && answer.length > 0
+        : typeof answer === 'string' && answer.length > 0;
+    })
+  );
+
+  const previewNewChildPaths = async () => {
+    if (!childRegistration || !registrationQuestionsComplete(childRegistration)) {
+      setError('أجب عن جميع الأسئلة المطلوبة قبل المتابعة.');
+      return;
+    }
+    setLearningSetupBusy(true);
+    clearError();
+    try {
+      const result = await apiRequest(
+        `/api/v1/children/${childRegistration.child.id}/learning-recommendations`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            questionnaireVersion: childRegistration.questionnaire.version,
+            submissionId: childRegistration.submissionId,
+            ageBand: childRegistration.child.ageBand,
+            answers: childRegistration.answers
+          })
+        }
+      );
+      setChildRegistration((current) => current ? ({
+        ...current,
+        step: 'recommendations',
+        recommendations: result,
+        selectedPathKeys: result.recommendations.map(({ key }) => key)
+      }) : current);
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLearningSetupBusy(false);
+    }
+  };
+
+  const completeNewChildRegistration = async () => {
+    if (!childRegistration?.recommendations) return;
+    if (!registrationConsent) {
+      setError('لإكمال التسجيل، وافق أولًا على حفظ بيانات أنشطة التعلّم لهذا الملف.');
+      return;
+    }
+    if (childRegistration.recommendations.recommendations.length
+      && !childRegistration.selectedPathKeys.length) {
+      setError('اختر مسارًا تعليميًا واحدًا على الأقل للمتابعة.');
+      return;
+    }
+    setLearningSetupBusy(true);
+    clearError();
+    try {
+      const child = childRegistration.child;
+      const consentResult = await apiRequest(`/api/v1/children/${child.id}/consents`);
+      const currentLearningConsent = consentResult.consents.find((item) => item.consentType === 'learning_data');
+      if (!currentLearningConsent?.granted) {
+        const { consent } = await apiRequest(`/api/v1/children/${child.id}/consents`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ consentType: 'learning_data', granted: true })
+        });
+        setConsents(consentResult.consents.map((item) => (
+          item.consentType === consent.consentType ? consent : item
+        )));
+      } else {
+        setConsents(consentResult.consents);
+      }
+      const result = await apiRequest(`/api/v1/children/${child.id}/complete-registration`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          questionnaireVersion: childRegistration.questionnaire.version,
+          submissionId: childRegistration.submissionId,
+          ageBand: child.ageBand,
+          answers: childRegistration.answers,
+          pathKeys: childRegistration.selectedPathKeys
+        })
+      });
+      if (result.needsReview) {
+        setChildRegistration((current) => current ? ({ ...current, step: 'needs_review' }) : current);
+        setPendingRegistrations((current) => current.map((item) => item.id === child.id
+          ? { ...item, registrationDraft: { ...item.registrationDraft, step: 'needs_review' } }
+          : item));
+        setNotice('حُفظت الإجابات، لكن لم يتوفر مسار مناسب بعد. سيبقى الملف قيد الإعداد إلى أن تتوفر توصية مناسبة.');
+        return;
+      }
+      setChildren((current) => [result.child, ...current.filter((item) => item.id !== result.child.id)]);
+      setPendingRegistrations((current) => current.filter((item) => item.id !== result.child.id));
+      void refreshChildAllowance();
+      setSelectedChildId(result.child.id);
+      setChildRegistration(null);
+      window.sessionStorage.removeItem('harf-child-registration-request');
+      setRegistrationRequestId('');
+      setSection('profile');
+      setNotice('اكتمل إعداد ملف الطفل وتعيين المسار التعليمي.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLearningSetupBusy(false);
+    }
+  };
+
+  const startLearningSetup = async () => {
+    if (!selectedChild) return;
+    clearError();
+    setNotice('');
+    setLearningSetupBusy(true);
+    const child = selectedChild;
+    try {
+      const [{ questionnaire }, { response }] = await Promise.all([
+        apiRequest(`/api/v1/children/${child.id}/learning-questionnaire`),
+        apiRequest(`/api/v1/children/${child.id}/learning-questionnaire-response`)
+      ]);
+      if (selectedChildId !== child.id) return;
+      const currentQuestionIds = new Set(questionnaire.questions.map(({ id }) => id));
+      const currentOptionIds = new Set(questionnaire.questions.flatMap(({ options }) => options.map(({ id }) => id)));
+      const responseMatchesQuestionnaire = response?.questionnaireVersion === questionnaire.version;
+      const savedAnswers = Object.fromEntries(Object.entries(responseMatchesQuestionnaire ? response.answers : {})
+        .filter(([questionId]) => currentQuestionIds.has(questionId))
+        .map(([questionId, answer]) => [
+          questionId,
+          Array.isArray(answer)
+            ? answer.filter((optionId) => currentOptionIds.has(optionId))
+            : currentOptionIds.has(answer) ? answer : null
+        ])
+        .filter(([, answer]) => answer !== null && (!Array.isArray(answer) || answer.length > 0)));
+      setLearningSetup({
+        questionnaire,
+        previousResponse: response,
+        answers: savedAnswers,
+        submissionId: window.crypto.randomUUID(),
+        recommendations: null,
+        selectedPathKeys: []
+      });
+      if (response && !responseMatchesQuestionnaire) {
+        setNotice('تم تحديث الاستبيان منذ آخر إجابة محفوظة. ابدأ بالإصدار الحالي، وستظل الإجابة السابقة محفوظة دون خلط الإصدارات.');
+      }
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLearningSetupBusy(false);
+    }
+  };
+
+  const setLearningAnswer = (question, optionId, checked = true) => {
+    setLearningSetup((current) => {
+      if (!current) return current;
+      const nextAnswers = { ...current.answers };
+      if (question.type === 'multiple') {
+        const selected = new Set(nextAnswers[question.id] ?? []);
+        if (checked) selected.add(optionId);
+        else selected.delete(optionId);
+        if (selected.size) nextAnswers[question.id] = [...selected];
+        else delete nextAnswers[question.id];
+      } else {
+        nextAnswers[question.id] = optionId;
+      }
+      return {
+        ...current,
+        answers: nextAnswers,
+        submissionId: window.crypto.randomUUID(),
+        recommendations: null,
+        selectedPathKeys: []
+      };
+    });
+  };
+
+  const previewLearningPaths = async (event) => {
+    event.preventDefault();
+    if (!learningSetup || !selectedChild) return;
+    if (!questionnaireAnswersComplete(learningSetup.questionnaire, learningSetup.answers)) {
+      setError('أجب عن جميع الأسئلة المطلوبة قبل المتابعة.');
+      return;
+    }
+    const child = selectedChild;
+    const setup = learningSetup;
+    setLearningSetupBusy(true);
+    clearError();
+    try {
+      const result = await apiRequest(
+        `/api/v1/children/${child.id}/learning-recommendations`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            questionnaireVersion: setup.questionnaire.version,
+            submissionId: setup.submissionId,
+            ageBand: child.ageBand,
+            answers: setup.answers
+          })
+        }
+      );
+      if (selectedChildId === child.id) {
+        setLearningSetup((current) => current ? ({
+          ...current,
+          recommendations: result,
+          selectedPathKeys: result.recommendations.map(({ key }) => key)
+        }) : current);
+      }
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLearningSetupBusy(false);
+    }
+  };
+
+  const confirmLearningPaths = async ({ keepCurrentPath = false } = {}) => {
+    if (!learningSetup || !selectedChild || !learningSetup.recommendations) return;
+    if (!currentConsent('learning_data')) {
+      setError('فعّل موافقة حفظ أنشطة التعلّم من ملف الطفل قبل حفظ الاستبيان والتعيينات.');
+      return;
+    }
+    if (!keepCurrentPath && !learningSetup.selectedPathKeys.length) {
+      setError('اختر مسارًا مقترحًا أو احتفظ بالمسار الحالي مع حفظ الإجابات.');
+      return;
+    }
+    setLearningSetupBusy(true);
+    clearError();
+    const child = selectedChild;
+    const setup = learningSetup;
+    try {
+      await apiRequest(
+        `/api/v1/children/${child.id}/learning-path-assignments`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            questionnaireVersion: setup.questionnaire.version,
+            submissionId: setup.submissionId,
+            ageBand: child.ageBand,
+            answers: setup.answers,
+            pathKeys: keepCurrentPath ? [] : setup.selectedPathKeys
+          })
+        }
+      );
+      setLearningSetup(null);
+      setLearningRefresh((current) => current + 1);
+      setNotice(keepCurrentPath
+        ? 'تم حفظ إجاباتك دون تغيير المسارات الحالية.'
+        : 'تم حفظ إجاباتك وتحديث المسارات التي اخترتها. تم الاحتفاظ بسجل التعيينات والتقدم السابق.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setLearningSetupBusy(false);
+    }
+  };
+
+  const startEdit = (child) => {
+    setEditingChild(child);
+    setChildRegistration(null);
+    setSelectedChildId(child.id);
+    clearError();
+    setNotice('');
+    setSection('addChild');
+  };
+
+  const saveChild = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const ageBand = form.get('ageBand');
+    const avatar = form.get('avatar');
+    const payload = {
+      displayName: form.get('displayName'),
+      ageBand: ageBand || null,
+      avatar: avatar || null
+    };
+    setBusy(true);
+    clearError();
+    setNotice('');
+    try {
+      if (editingChild) {
+        const result = await apiRequest(`/api/v1/children/${editingChild.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        setChildren((current) => current.map((child) => child.id === result.child.id ? result.child : child));
+        setSelectedChildId(result.child.id);
+        setNotice('تم تحديث ملف الطفل.');
+        setSection('profile');
+      } else {
+        const requestId = registrationRequestId
+          || window.sessionStorage.getItem('harf-child-registration-request')
+          || window.crypto.randomUUID();
+        window.sessionStorage.setItem('harf-child-registration-request', requestId);
+        const result = await apiRequest('/api/v1/children', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...payload, registrationId: requestId })
+        });
+        setPendingRegistrations((current) => [
+          { ...result.child, registrationDraft: { step: 'questionnaire', answers: {} } },
+          ...current.filter((item) => item.id !== result.child.id)
+        ]);
+        await beginChildRegistration(result.child);
+      }
+      setEditingChild(null);
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeChild = async (child) => {
+    if (child.status !== 'active') return;
+    if (!window.confirm('هل أنت متأكد من إزالة هذا الطفل من حسابك؟ سيتم إخفاء ملف الطفل من قائمة أطفالك النشطين، مع الاحتفاظ ببياناته التعليمية وسجل تقدمه. يمكنك إضافة طفل آخر بدلًا منه وفقًا لحدود اشتراكك.')) return;
+    setBusy(true);
+    clearError();
+    setNotice('');
+    try {
+      const result = await apiRequest(`/api/v1/children/${child.id}`, { method: 'DELETE' });
+      setChildren((current) => current.map((item) => item.id === child.id ? result.child : item));
+      void refreshChildAllowance();
+      setSelectedChildId((current) => current === child.id
+        ? children.find((item) => item.id !== child.id && item.status === 'active')?.id ?? ''
+        : current);
+      setNotice('تمت إزالة الطفل من قائمة الملفات النشطة، مع الاحتفاظ بجميع سجلاته.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleConsents = async (child) => {
+    clearError();
+    setNotice('');
+    if (consentChildId === child.id) {
+      setConsentChildId('');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await apiRequest(`/api/v1/children/${child.id}/consents`);
+      setConsents(result.consents);
+      setConsentChildId(child.id);
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const recordConsent = async (child, consentType, granted) => {
+    setBusy(true);
+    clearError();
+    setNotice('');
+    try {
+      const result = await apiRequest(`/api/v1/children/${child.id}/consents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ consentType, granted })
+      });
+      setConsents((current) => current.map((consent) => (
+        consent.consentType === result.consent.consentType ? result.consent : consent
+      )));
+      setNotice('تم حفظ اختيارك.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectSection = (nextSection) => {
+    setSection(nextSection);
+    setNotice('');
+    clearError();
+    if (nextSection === 'activity' || nextSection === 'progress') {
+      setAttemptPage(1);
+    }
+  };
+
+  const saveProfile = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    clearError();
+    setNotice('');
+    try {
+      const { user: updatedUser } = await apiRequest('/api/v1/auth/parent/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: profileName })
+      });
+      onProfileUpdated(updatedUser);
+      setNotice('تم حفظ الملف الشخصي.');
+    } catch (requestError) {
+      reportError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const currentConsent = (consentType) => consents.find(
+    (consent) => consent.consentType === consentType
+  )?.granted ?? false;
+
+  const renderConsentControls = (child) => (
+    <div className="dashboard-consents" aria-label={`موافقات ${child.displayName}`}>
+      {consents.map((consent) => (
+        <div className="dashboard-consent" key={consent.consentType}>
+          <div>
+            <strong>{consentLabels[consent.consentType]}</strong>
+            <span>{consent.granted ? 'مسموح' : 'غير مسموح'}</span>
+          </div>
+          <button
+            type="button"
+            className="button button--small button--outline"
+            disabled={busy}
+            onClick={() => recordConsent(child, consent.consentType, !consent.granted)}
+          >
+            {consent.granted ? 'سحب الموافقة' : 'منح الموافقة'}
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
+  const renderChildCard = (child) => (
+    <article
+      className={`child-card${child.status === 'archived' ? ' child-card--archived' : ''}`}
+      key={child.id}
+    >
+      <div className="child-card__heading">
+        <span className="dashboard-avatar" aria-hidden="true">{avatarFor(child.avatar)}</span>
+        <div className="child-card__identity">
+          <h3>{child.displayName}</h3>
+          <p>{ageBands.find((band) => band.value === child.ageBand)?.label ?? 'الفئة العمرية غير مشاركة'}</p>
+        </div>
+        <span className="child-status">{child.status === 'active' ? 'نشط' : 'متوقف مؤقتًا'}</span>
+      </div>
+      <div className="child-card__actions">
+        <button type="button" className="button button--small button--outline" onClick={() => {
+          setSelectedChildId(child.id);
+          selectSection('profile');
+        }}>
+          الملف والتقدم
+        </button>
+        <button type="button" className="button button--small button--outline" disabled={busy} onClick={() => startEdit(child)}>
+          تعديل
+        </button>
+        {child.status === 'active'
+          ? <button type="button" className="button button--small button--outline" disabled={busy} onClick={() => void removeChild(child)}>
+            إزالة الطفل من حسابي
+          </button>
+          : <span className="dashboard-privacy-note">ملف مؤرشف محفوظ بسجلاته</span>}
+        <button type="button" className="auth-text-button" disabled={busy} onClick={() => toggleConsents(child)}>
+          {consentChildId === child.id ? 'إخفاء الموافقات' : 'إدارة الموافقات'}
+        </button>
+      </div>
+      {consentChildId === child.id && renderConsentControls(child)}
+    </article>
+  );
+
+  const renderChildAllowance = () => {
+    if (!childAllowance) {
+      return <p className="dashboard-loading" role="status">جارٍ تحميل حد الأطفال في الاشتراك…</p>;
+    }
+    if (childAllowance.subscriptionStatus !== 'active') {
+      return <ProgressNotice>يلزم اشتراك نشط لإضافة ملفات أطفال. لا تتأثر الملفات الموجودة أو سجلاتها بانتهاء الاشتراك.</ProgressNotice>;
+    }
+    if (childAllowance.overLimit) {
+      return <ProgressNotice>يتجاوز عدد الملفات النشطة الحد الحالي للاشتراك. ستظل الملفات الحالية متاحة، ويمكنك إزالة ملف نشط لإضافة طفل آخر.</ProgressNotice>;
+    }
+    if (childAllowance.canAddChild) {
+      return <p className="dashboard-privacy-note">
+        الأطفال النشطون: {childAllowance.active} من {childAllowance.maximum}. يمكنك إضافة {childAllowance.available} طفل{childAllowance.available === 1 ? '' : 'آخر'}.
+      </p>;
+    }
+    return <ProgressNotice>لقد وصلت إلى الحد الأقصى لعدد الأطفال المسموح به في اشتراكك. أزل ملفًا نشطًا لاستعادة خانة.</ProgressNotice>;
+  };
+
+  const renderAddChildButton = () => (
+    <button type="button" className="button button--primary"
+      disabled={!childAllowance?.canAddChild || busy}
+      onClick={startCreate}>إضافة طفل</button>
+  );
+
+  const renderAttemptList = () => {
+    if (loadingAttempts) return <p className="dashboard-loading" role="status">جارٍ تحميل سجل الأنشطة…</p>;
+    if (attempts.length === 0) {
+      return (
+        <ProgressNotice>
+          لا توجد محاولات ألعاب مسجلة لهذا الطفل حتى الآن. عند توفر أنشطة مدعومة وموافقة حفظ البيانات، ستظهر النتائج المسجلة هنا.
+        </ProgressNotice>
+      );
+    }
+    return (
+      <>
+        <div className="dashboard-attempt-list">
+          {attempts.map((attempt) => (
+            <article className="dashboard-attempt" key={attempt.id}>
+              <div>
+                <h4>{gameNames[attempt.gameId] ?? 'نشاط تعليمي'}</h4>
+                <time dateTime={attempt.completedAt}>{formatDate(attempt.completedAt)}</time>
+              </div>
+              <p>
+                {attempt.correctCount} من {attempt.totalQuestions} إجابات صحيحة
+                <span> · مدة النشاط {attempt.durationSeconds} ثانية</span>
+              </p>
+              {attempt.spatialProgress && (
+                <p className="dashboard-attempt__spatial">
+                  المستوى {attempt.spatialProgress.level} · اكتملت {attempt.spatialProgress.completionPercent}٪
+                  · محاولات إضافية {attempt.spatialProgress.incorrectAttempts}
+                  · تكرار التعليمات {attempt.spatialProgress.instructionReplays}
+                  · تلميحات {attempt.spatialProgress.hintCount}
+                </p>
+              )}
+            </article>
+          ))}
+        </div>
+        <div className="dashboard-pagination" aria-label="صفحات سجل الأنشطة">
+          <span>إجمالي المحاولات المسجلة: {attemptTotal}</span>
+          <div>
+            <button
+              type="button"
+              className="button button--small button--outline"
+              disabled={attemptPage <= 1 || loadingAttempts}
+              onClick={() => setAttemptPage((current) => Math.max(1, current - 1))}
+            >السابق</button>
+            <span>صفحة {attemptPage}</span>
+            <button
+              type="button"
+              className="button button--small button--outline"
+              disabled={!hasMoreAttempts || loadingAttempts}
+              onClick={() => setAttemptPage((current) => current + 1)}
+            >التالي</button>
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  const renderContent = () => {
+    if (section === 'testimonials') return <ParentTestimonials />;
+    if (loadingChildren) return <p className="dashboard-loading" role="status">جارٍ تحميل ملفات الأطفال…</p>;
+
+    if (section === 'overview') {
+      const activeChildren = children.filter((child) => child.status === 'active').length;
+      return (
+        <div className="dashboard-overview">
+          <section className="dashboard-welcome">
+            <div>
+              <span className="dashboard-eyebrow">مساحة الأسرة</span>
+              <h3>أهلًا بك في لوحة حرف</h3>
+              <p>تابع ملفات أطفالك والأنشطة المسجلة من مكان واحد.</p>
+            </div>
+            <span className="dashboard-welcome__animal" aria-hidden="true">🐼</span>
+          </section>
+          <div className="dashboard-stat-grid" aria-label="ملخص ملفات الأسرة">
+            <article className="dashboard-stat">
+              <span>ملفات الأطفال</span>
+              <strong>{children.length}</strong>
+            </article>
+            <article className="dashboard-stat">
+              <span>ملفات نشطة</span>
+              <strong>{activeChildren}</strong>
+            </article>
+          </div>
+          <div className="dashboard-section-heading">
+            <div>
+              <h3>ملفات أطفالك</h3>
+              <p>اختر ملفًا لعرض تفاصيله أو أضف ملفًا جديدًا.</p>
+            </div>
+            {renderAddChildButton()}
+          </div>
+          {renderChildAllowance()}
+          {children.filter((child) => child.status === 'active').length === 0
+            ? <ProgressNotice>لم تضف ملفات أطفال بعد. يمكنك إنشاء ملف باسم مختصر وفئة عمرية اختيارية.</ProgressNotice>
+            : <div className="child-list">{children.filter((child) => child.status === 'active').map(renderChildCard)}</div>}
+          {children.some((child) => child.status === 'archived') && (
+            <section className="dashboard-pending-registrations" aria-labelledby="archived-children-title">
+              <h4 id="archived-children-title">ملفات مؤرشفة محفوظة</h4>
+              <div className="child-list">{children.filter((child) => child.status === 'archived').map(renderChildCard)}</div>
+            </section>
+          )}
+          {pendingRegistrations.length > 0 && (
+            <section className="dashboard-pending-registrations" aria-labelledby="pending-registrations-title">
+              <h4 id="pending-registrations-title">إعدادات تسجيل غير مكتملة</h4>
+              {pendingRegistrations.map((child) => (
+                <article className="dashboard-pending-registration" key={child.id}>
+                  <div><strong>{child.displayName}</strong><span>أكمل الاستبيان وتأكيد المسار لبدء استخدام الأنشطة.</span></div>
+                  <button type="button" className="button button--small button--primary"
+                    onClick={() => resumeChildRegistration(child)}>استكمال الإعداد</button>
+                </article>
+              ))}
+            </section>
+          )}
+        </div>
+      );
+    }
+
+    if (section === 'children') {
+      return (
+        <section className="dashboard-section">
+          <div className="dashboard-section-heading">
+            <div>
+              <h3>ملفات أطفالي</h3>
+              <p>تظل الملفات المؤرشفة محفوظة مع سجلاتها.</p>
+            </div>
+            {renderAddChildButton()}
+          </div>
+          {renderChildAllowance()}
+          {children.filter((child) => child.status === 'active').length === 0
+            ? <ProgressNotice>لا توجد ملفات أطفال بعد.</ProgressNotice>
+            : <div className="child-list">{children.filter((child) => child.status === 'active').map(renderChildCard)}</div>}
+          {children.some((child) => child.status === 'archived') && (
+            <section className="dashboard-pending-registrations" aria-labelledby="archived-children-list-title">
+              <h4 id="archived-children-list-title">ملفات مؤرشفة محفوظة</h4>
+              <div className="child-list">{children.filter((child) => child.status === 'archived').map(renderChildCard)}</div>
+            </section>
+          )}
+          {pendingRegistrations.length > 0 && (
+            <section className="dashboard-pending-registrations" aria-labelledby="pending-registrations-list-title">
+              <h4 id="pending-registrations-list-title">استكمال تسجيل طفل</h4>
+              {pendingRegistrations.map((child) => (
+                <article className="dashboard-pending-registration" key={child.id}>
+                  <div><strong>{child.displayName}</strong><span>لم يكتمل تسجيل الملف بعد.</span></div>
+                  <button type="button" className="button button--small button--primary"
+                    onClick={() => resumeChildRegistration(child)}>استكمال الإعداد</button>
+                </article>
+              ))}
+            </section>
+          )}
+        </section>
+      );
+    }
+
+    if (section === 'specialists') {
+      const activeChildren = children.filter((child) => child.status === 'active');
+      const selectedSpecialist = specialists.find(({ id }) => id === selectedSpecialistId);
+      const slotsByDay = (specialistAvailability?.slots ?? []).reduce((groups, slot) => {
+        const day = dateKeyInTimeZone(slot.startsAt, slot.timeZone);
+        groups[day] ??= [];
+        groups[day].push(slot);
+        return groups;
+      }, {});
+      const orderedSlotDays = Object.entries(slotsByDay).sort(([firstDay], [secondDay]) => firstDay.localeCompare(secondDay));
+      return (
+        <section className="dashboard-section">
+          <div className="dashboard-section-heading">
+            <div>
+              <h3>دليل الأخصائيين المعتمدين</h3>
+              <p>حجز الأخصائي اختياري تمامًا، ولا يلزم لاستخدام الألعاب التعليمية.</p>
+            </div>
+          </div>
+          {loadingSpecialists && <p className="dashboard-loading" role="status">جارٍ تحميل الأخصائيين والمواعيد…</p>}
+          {!loadingSpecialists && specialists.length === 0 && (
+            <ProgressNotice>لا توجد ملفات أخصائيين معتمدة ومعلنة حاليًا.</ProgressNotice>
+          )}
+          {specialists.length > 0 && (
+            <>
+              <div className="specialist-grid">
+                {specialists.map((specialist) => (
+                  <article className={`specialist-card${selectedSpecialistId === specialist.id ? ' specialist-card--selected' : ''}`} key={specialist.id}>
+                    <span className="specialist-card__portrait-wrap">
+                      <span className="specialist-card__icon" aria-hidden="true">✦</span>
+                      {specialist.profilePhotoUrl && (
+                        <img
+                          className="specialist-card__portrait specialist-card__portrait--landscape"
+                          src={getApiUrl(specialist.profilePhotoUrl)}
+                          alt={`الصورة الشخصية لـ${displayNameOrFallback(specialist.displayName)}`}
+                          onError={(event) => { event.currentTarget.hidden = true; }}
+                        />
+                      )}
+                    </span>
+                    <h3>{displayNameOrFallback(specialist.displayName)}</h3>
+                    <strong>{specialist.specialty}</strong>
+                    <p>{specialist.credentials}</p>
+                    <p>{specialist.bio}</p>
+                    {specialist.appointmentAvailable ? (
+                      <>
+                        <p>{formatAppointmentPrice(specialist.appointmentPriceMinor, specialist.appointmentCurrency)} · {specialist.appointmentDurationMinutes} دقيقة</p>
+                        <button type="button" className="button button--small button--outline"
+                          aria-pressed={selectedSpecialistId === specialist.id}
+                          onClick={() => {
+                            setVisibleAppointmentDays(APPOINTMENT_DAYS_PER_PAGE);
+                            setSelectedSpecialistId((current) => current === specialist.id ? '' : specialist.id);
+                          }}>
+                          {selectedSpecialistId === specialist.id ? 'إخفاء المواعيد' : 'اختيار الأخصائي وعرض المواعيد'}
+                        </button>
+                      </>
+                    ) : <p>لا تتوفر مواعيد للحجز حاليًا.</p>}
+                  </article>
+                ))}
+              </div>
+              {selectedSpecialist?.appointmentAvailable && (
+                <section className="dashboard-section">
+                  <h3>المواعيد المتاحة · {displayNameOrFallback(selectedSpecialist.displayName)}</h3>
+                  <p className="dashboard-privacy-note">تُعرض المواعيد حسب توقيت الأخصائي، ولا يظهر موعد إلا إذا كان بعد ٤٨ ساعة على الأقل. اختر التاريخ ثم الوقت المناسب.</p>
+                  {activeChildren.length > 0 ? (
+                    <label className="dashboard-filter">ملف الطفل
+                      <select value={selectedChild?.status === 'active' ? selectedChildId : activeChildren[0].id}
+                        onChange={(event) => setSelectedChildId(event.target.value)}>
+                        {activeChildren.map((child) => <option value={child.id} key={child.id}>{child.displayName}</option>)}
+                      </select>
+                    </label>
+                  ) : <ProgressNotice>أضف ملف طفل نشطًا قبل طلب موعد.</ProgressNotice>}
+                  {loadingAvailability ? <p className="dashboard-loading" role="status">جارٍ تحميل المواعيد المتاحة…</p>
+                    : specialistAvailability?.slots?.length ? (
+                      <>
+                        <div className="appointment-day-list">
+                          {orderedSlotDays.slice(0, visibleAppointmentDays).map(([day, daySlots]) => (
+                            <section className="appointment-day-group" key={day}>
+                              <h4>{formatAppointmentDate(daySlots[0].startsAt, daySlots[0].timeZone)}</h4>
+                              <div className="appointment-slot-grid">
+                                {daySlots.map((slot) => (
+                                  <article className="appointment-slot" key={slot.startsAt}>
+                                    <strong className="appointment-slot__time">
+                                      <time dateTime={slot.startsAt}>
+                                        من {formatAppointmentTime(slot.startsAt, slot.timeZone)} إلى {formatAppointmentTime(slot.endsAt, slot.timeZone)}
+                                      </time>
+                                    </strong>
+                                    <span>{formatAppointmentPrice(slot.amountMinor, slot.currency)} · {slot.durationMinutes} دقيقة</span>
+                                    <button type="button" className="button button--small button--primary"
+                                      disabled={Boolean(bookingSlotStartsAt) || activeChildren.length === 0}
+                                      onClick={() => bookAppointment(slot)}>
+                                      {bookingSlotStartsAt === slot.startsAt ? 'جارٍ إرسال هذا الطلب…' : 'طلب موعد اختياري'}
+                                    </button>
+                                  </article>
+                                ))}
+                              </div>
+                            </section>
+                          ))}
+                        </div>
+                        {orderedSlotDays.length > visibleAppointmentDays && (
+                          <button
+                            type="button"
+                            className="button button--outline"
+                            onClick={() => setVisibleAppointmentDays((count) => count + APPOINTMENT_DAYS_PER_PAGE)}
+                          >
+                            عرض المزيد من المواعيد
+                          </button>
+                        )}
+                      </>
+                    ) : <ProgressNotice>لا توجد مواعيد متاحة خلال الأسبوعين القادمين. جرّب لاحقًا.</ProgressNotice>}
+                  <p className="dashboard-privacy-note">السعر والمدة يُحفظان كما كانا وقت طلب الموعد. رسوم الموعد منفصلة عن اشتراك الألعاب، ولا تنفذ المنصة تحصيلها.</p>
+                </section>
+              )}
+            </>
+          )}
+        </section>
+      );
+    }
+
+    if (section === 'appointments') {
+      return (
+        <section className="dashboard-section">
+          <h3>طلبات وسجل المواعيد</h3>
+          <p>تظهر الطلبات من الأحدث إلى الأقدم، وتعرض كل بطاقة حالتها وتاريخ إرسالها وتفاصيل الجلسة. طلب المواعيد اختياري؛ يمكنك استخدام الألعاب دون حجز.</p>
+          {loadingAppointments ? <p className="dashboard-loading" role="status">جارٍ تحميل سجل المواعيد…</p>
+            : appointments.length === 0 ? <ProgressNotice>لا توجد طلبات أو مواعيد محفوظة.</ProgressNotice>
+              : <>
+                <div className="parent-appointment-tabs" role="group" aria-label="تصفية سجل المواعيد">
+                  {appointmentTabs.map((tab) => {
+                    const count = tab.id === 'all'
+                      ? orderedAppointments.length
+                      : orderedAppointments.filter((appointment) => appointmentHistoryCategory(appointment) === tab.id).length;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        aria-pressed={appointmentFilter === tab.id}
+                        className={`parent-appointment-tabs__button${appointmentFilter === tab.id ? ' is-active' : ''}`}
+                        onClick={() => setAppointmentFilter(tab.id)}
+                      >
+                        {tab.label}<span>{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {filteredAppointments.length === 0
+                  ? <ProgressNotice>لا توجد مواعيد ضمن هذه الحالة.</ProgressNotice>
+                  : <div className="parent-appointment-history">
+                {filteredAppointments.map((appointment) => (
+                  <article className="parent-appointment-card" key={appointment.id}>
+                    <header className="parent-appointment-card__header">
+                      <div className="parent-appointment-specialist">
+                        {appointment.specialistProfilePhotoUrl && (
+                          <img src={getApiUrl(appointment.specialistProfilePhotoUrl)} alt="" loading="lazy" />
+                        )}
+                        <div>
+                          <h4>{displayNameOrFallback(appointment.specialistName)}</h4>
+                          <p>للطفل: {appointment.childName || 'ملف طفل'}</p>
+                        </div>
+                      </div>
+                      <div className="parent-appointment-card__summary">
+                        <span className={`appointment-status appointment-status--${appointment.status}`}>
+                          {appointmentStatuses[appointment.status] ?? 'حالة غير محددة'}
+                        </span>
+                        <span className="parent-appointment-card__requested">
+                          <strong>تاريخ إرسال الطلب</strong>
+                          <time dateTime={appointment.requestedAt || undefined}>
+                            {formatDate(appointment.requestedAt)}
+                          </time>
+                        </span>
+                      </div>
+                    </header>
+                    <div className="parent-appointment-card__content">
+                      <div className="appointment-session-time">
+                        <strong>تاريخ ووقت الجلسة</strong>
+                        <time dateTime={appointment.startsAt}>
+                          {formatAppointmentDate(appointment.startsAt, appointment.timeZone)}
+                          {' · من '}{formatAppointmentTime(appointment.startsAt, appointment.timeZone)}
+                          {' إلى '}{formatAppointmentTime(appointment.endsAt, appointment.timeZone)}
+                        </time>
+                        <small>حسب توقيت الأخصائي</small>
+                      </div>
+                      <p className="parent-appointment-card__price">
+                        <span>مدة الجلسة</span><strong>{appointment.durationMinutes} دقيقة</strong>
+                        <span>قيمة الموعد</span><strong>{formatAppointmentPrice(appointment.amountMinor, appointment.currency)}</strong>
+                      </p>
+                      {appointment.payment?.status === 'pending_verification' && (
+                        <div className="session-payment-state" role="status">
+                          <strong>تم إرسال إيصال الدفع · قيد المراجعة الإدارية</strong>
+                          <p>أرسل في {formatDate(appointment.payment.submittedAt)}. ستُحدّث حالة الموعد بعد مراجعة الإيصال.</p>
+                          {appointment.payment.receiptAvailable && (
+                            <img
+                              className="session-payment-receipt-preview"
+                              src={getApiUrl(`/api/v1/appointments/${appointment.id}/payment/receipt`)}
+                              alt="صورة إيصال الدفع المرسل"
+                              loading="lazy"
+                            />
+                          )}
+                        </div>
+                      )}
+                      {appointment.payment?.status === 'approved' && (
+                        <p className="auth-message" role="status">تم اعتماد الدفع وتأكيد الجلسة.</p>
+                      )}
+                      {['awaiting_payment', 'rejected'].includes(appointment.payment?.status) && (
+                        <section className="session-payment-panel">
+                          <h5>{appointment.payment.status === 'rejected' ? 'يلزم إرسال إيصال جديد' : 'الدفع مطلوب لتأكيد الجلسة'}</h5>
+                          <p>
+                            المبلغ المستحق: <strong>{formatAppointmentPrice(appointment.payment.amountMinor, appointment.payment.currency)}</strong>
+                          </p>
+                          <p>آخر موعد للدفع: {formatAppointmentDate(appointment.payment.deadline, appointment.timeZone)} · {formatAppointmentTime(appointment.payment.deadline, appointment.timeZone)}</p>
+                          {appointment.payment.rejectionReason && (
+                            <p className="appointment-request-deadline">
+                              <strong>سبب رفض الإيصال السابق: </strong>{appointment.payment.rejectionReason}
+                            </p>
+                          )}
+                          {appointment.payment.receiptAvailable && (
+                            <img
+                              className="session-payment-receipt-preview"
+                              src={getApiUrl(`/api/v1/appointments/${appointment.id}/payment/receipt`)}
+                              alt="صورة الإيصال السابق"
+                              loading="lazy"
+                            />
+                          )}
+                          {selectedSessionPaymentId === appointment.id ? (
+                            <div className="session-payment-panel__form">
+                              {loadingSessionPayment ? <p className="dashboard-loading" role="status">جارٍ تحميل تعليمات الدفع…</p>
+                                : sessionPaymentDetails ? (
+                                  <form className="auth-form" onSubmit={(event) => submitSessionPayment(event, appointment)}>
+                                    {Object.keys(sessionPaymentDetails.methods).length > 0 ? (
+                                      <>
+                                        <label>طريقة الدفع
+                                          <select required value={selectedPaymentMethod}
+                                            onChange={(event) => setSelectedPaymentMethod(event.target.value)}>
+                                            {Object.entries(sessionPaymentDetails.methods).map(([key, config]) => (
+                                              <option key={key} value={key}>{config.label}</option>
+                                            ))}
+                                          </select>
+                                        </label>
+                                        {sessionPaymentDetails.methods[selectedPaymentMethod] && (
+                                          <div className="session-payment-instructions">
+                                            <strong>{sessionPaymentDetails.methods[selectedPaymentMethod].label}</strong>
+                                            <bdi dir="ltr">{sessionPaymentDetails.methods[selectedPaymentMethod].recipient}</bdi>
+                                            <p>{sessionPaymentDetails.methods[selectedPaymentMethod].instructions}</p>
+                                            <button type="button" className="button button--small button--outline"
+                                              onClick={() => navigator.clipboard.writeText(sessionPaymentDetails.methods[selectedPaymentMethod].recipient)
+                                                .then(() => setNotice('تم نسخ بيانات الاستلام.'))
+                                                .catch(() => setError('تعذر نسخ البيانات. يمكنك تحديدها ونسخها يدويًا.'))}>
+                                              نسخ بيانات الاستلام
+                                            </button>
+                                          </div>
+                                        )}
+                                        <label>صورة إيصال التحويل (PNG أو JPG أو WebP، حتى ٥ ميجابايت)
+                                          <input type="file" accept="image/png,image/jpeg,image/webp" required
+                                            onChange={(event) => setPaymentReceiptFile(event.target.files?.[0] ?? null)} />
+                                        </label>
+                                        {paymentReceiptPreview && (
+                                          <img className="session-payment-receipt-preview"
+                                            src={paymentReceiptPreview} alt="معاينة الإيصال قبل الإرسال" />
+                                        )}
+                                        <label className="dashboard-checkbox">
+                                          <input type="checkbox" required />
+                                          أؤكد أنني أرسلت المبلغ الموضح وأرفقت صورة الإيصال الصحيحة.
+                                        </label>
+                                        <button type="submit" className="button button--primary"
+                                          disabled={submittingSessionPayment || !paymentReceiptFile}>
+                                          {submittingSessionPayment ? 'جارٍ إرسال الإيصال…' : 'إرسال الإيصال للمراجعة'}
+                                        </button>
+                                      </>
+                                    ) : <p className="dashboard-empty-state">طرق الدفع غير متاحة حاليًا. يرجى التواصل مع الإدارة.</p>}
+                                  </form>
+                                ) : null}
+                            </div>
+                          ) : (
+                            <button type="button" className="button button--primary"
+                              onClick={() => void showSessionPayment(appointment.id)}>
+                              {appointment.payment.status === 'rejected' ? 'إرسال إيصال مصحح' : 'عرض تعليمات الدفع'}
+                            </button>
+                          )}
+                        </section>
+                      )}
+                      {appointment.status === 'pending' && (
+                        <p className="appointment-request-deadline">
+                          <strong>آخر موعد لرد الأخصائي: </strong>
+                          <time dateTime={appointment.expiresAt}>
+                            {formatAppointmentDate(appointment.expiresAt, appointment.timeZone)}
+                            {' · '}{formatAppointmentTime(appointment.expiresAt, appointment.timeZone)}
+                          </time>
+                          <small>ينتهي الطلب عند موعد الجلسة أو بعد ٤٨ ساعة من إرساله، أيهما أقرب.</small>
+                        </p>
+                      )}
+                      {appointment.decisionNote && <p>ملاحظة الأخصائي: {appointment.decisionNote}</p>}
+                      {appointment.status === 'accepted' && (
+                        <p>حالة الجلسة: {{
+                          not_started: 'لم تبدأ',
+                          in_progress: 'جارية',
+                          completed: 'مكتملة',
+                          no_show: 'لم يحضر الطفل',
+                          specialist_no_show: 'لم يحضر الأخصائي'
+                        }[appointment.sessionStatus] || 'لم تبدأ'}</p>
+                      )}
+                      {appointment.parentProgressReport && (
+                        <div className="dashboard-privacy-note">
+                          <strong>ملخص تعليمي من الأخصائي · {formatDate(appointment.parentProgressReport.createdAt)}</strong>
+                          <p>{appointment.parentProgressReport.summary}</p>
+                          {appointment.parentProgressReport.suggestedActivities?.length > 0 && (
+                            <ul>{appointment.parentProgressReport.suggestedActivities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+                          )}
+                          <small>هذا الملخص تعليمي ولا يمثل تشخيصًا طبيًا.</small>
+                        </div>
+                      )}
+                      {appointment.status === 'accepted' && (
+                        <>
+                          <p className="dashboard-privacy-note">
+                            الأخصائي: {appointment.specialistName || 'غير متاح'}
+                          </p>
+                          <p className="dashboard-privacy-note">
+                            حالة الجلسة المرئية: {appointment.meetingStatus === 'live' ? 'جارية'
+                              : appointment.meetingStatus === 'ended' ? 'منتهية'
+                                : appointment.meetingAvailable ? 'مجدولة' : 'غير متاحة'}
+                          </p>
+                          {appointment.sessionStartedAt && (
+                            <p className="dashboard-privacy-note">بدأت الجلسة: {formatDate(appointment.sessionStartedAt)}</p>
+                          )}
+                          {appointment.sessionEndedAt && (
+                            <p className="dashboard-privacy-note">انتهت الجلسة: {formatDate(appointment.sessionEndedAt)}</p>
+                          )}
+                          {appointment.sessionNoShowAt && (
+                            <p className="dashboard-privacy-note">سُجّل عدم الحضور: {formatDate(appointment.sessionNoShowAt)}</p>
+                          )}
+                          {appointment.sessionSpecialistNoShowAt && (
+                            <p className="dashboard-privacy-note">أُبلغ عن عدم حضور الأخصائي: {formatDate(appointment.sessionSpecialistNoShowAt)}</p>
+                          )}
+                          {!['completed', 'no_show', 'specialist_no_show'].includes(appointment.sessionStatus) && (
+                            <>
+                              <p className="dashboard-privacy-note">
+                                جهّزوا جهازًا متصلًا بالإنترنت، واسمحوا للمتصفح باستخدام الكاميرا والميكروفون عند تشغيلهما داخل الجلسة.
+                              </p>
+                              <AppointmentJoinButton
+                                appointment={appointment}
+                                viewerRole="parent"
+                                onJoin={() => setMeetingAppointment(appointment)}
+                              />
+                            </>
+                          )}
+                          {appointment.sessionStatus === 'not_started'
+                            && new Date(appointment.endsAt).getTime() <= appointmentClock && (
+                              <button type="button" className="button button--small button--outline"
+                                disabled={Boolean(busySpecialistNoShowId)}
+                                onClick={() => void reportSpecialistNoShow(appointment)}>
+                                {busySpecialistNoShowId === appointment.id
+                                  ? 'جارٍ تسجيل البلاغ…'
+                                  : 'الإبلاغ عن عدم حضور الأخصائي'}
+                              </button>
+                            )}
+                        </>
+                      )}
+                    </div>
+                  </article>
+                ))}
+                  </div>}
+              </>}
+        </section>
+      );
+    }
+
+    if (section === 'addChild') {
+      if (childRegistration) {
+        const stepLabels = ['معلومات الطفل', 'استبيان وليّ الأمر', 'مراجعة الإجابات', 'المسار المقترح'];
+        const currentStep = childRegistration.step === 'questionnaire' ? 1
+          : childRegistration.step === 'review' ? 2 : 3;
+        const answerLabels = (question) => {
+          const answer = childRegistration.answers[question.id];
+          const selected = Array.isArray(answer) ? answer : answer ? [answer] : [];
+          return question.options.filter((option) => selected.includes(option.id)).map(({ label }) => label);
+        };
+        return (
+          <section className="dashboard-section child-registration">
+            <header className="child-registration__heading">
+              <span className="dashboard-eyebrow">إعداد ملف {childRegistration.child.displayName}</span>
+              <h3>لنقترح بداية تعليمية مناسبة</h3>
+              <p>أجب عن الاستبيان القصير، راجع اختياراتك، ثم اختر المسار التعليمي المقترح.</p>
+            </header>
+            <ol className="child-registration__steps" aria-label="خطوات تسجيل الطفل">
+              {stepLabels.map((label, index) => (
+                <li className={index <= currentStep ? 'is-current' : ''} key={label}>
+                  <span>{index + 1}</span><small>{label}</small>
+                </li>
+              ))}
+            </ol>
+            {!childRegistration.questionnaire ? (
+              <div className="dashboard-empty-state" role="status">
+                <p>الاستبيان غير متاح مؤقتًا. لم يكتمل تسجيل الطفل بعد.</p>
+                <button type="button" className="button button--outline" disabled={learningSetupBusy}
+                  onClick={() => void beginChildRegistration(
+                    childRegistration.child,
+                    childRegistration.child.registrationDraft
+                  )}>
+                  {learningSetupBusy ? 'جارٍ المحاولة…' : 'إعادة المحاولة'}
+                </button>
+              </div>
+            ) : childRegistration.step === 'needs_review' ? (
+              <div className="dashboard-learning-recommendations">
+                <h4>نحتاج إلى مراجعة إعداد المسار</h4>
+                <p>حُفظت إجاباتك، لكن لم يتوفر مسار منشور مناسب لها حاليًا. لن نعيّن مسارًا غير ملائم، وسيظل الملف غير مفعّل حتى تتوفر بداية تعليمية مناسبة.</p>
+                <button type="button" className="button button--primary"
+                  onClick={() => setChildRegistration((current) => current ? ({
+                    ...current,
+                    step: 'questionnaire',
+                    recommendations: null,
+                    selectedPathKeys: []
+                  }) : current)}>
+                  مراجعة الإجابات والمحاولة مجددًا
+                </button>
+              </div>
+            ) : childRegistration.step === 'questionnaire' ? (
+              <div className="child-registration__panel">
+                <h4>استبيان وليّ الأمر</h4>
+                <p>تُستخدم الإجابات لاقتراح أنشطة تعليمية فقط، وليست تشخيصًا أو تقييمًا طبيًا. الأسئلة التي تحمل «مطلوب» يجب الإجابة عنها.</p>
+                {childRegistration.questionnaire.questions.map((question, index) => (
+                  <fieldset className="child-registration__question" key={question.id}>
+                    <legend>{index + 1}. {question.text} {question.required && <strong>مطلوب</strong>}</legend>
+                    {question.helpText && <p>{question.helpText}</p>}
+                    {question.options.map((option) => (
+                      <label className="dashboard-learning-answer" key={option.id}>
+                        <input
+                          type={question.type === 'multiple' ? 'checkbox' : 'radio'}
+                          name={`registration-${question.id}`}
+                          checked={question.type === 'multiple'
+                            ? (childRegistration.answers[question.id] ?? []).includes(option.id)
+                            : childRegistration.answers[question.id] === option.id}
+                          onChange={(event) => setChildRegistrationAnswer(question, option.id, event.target.checked)}
+                        />
+                        <span>{option.label}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ))}
+                <div className="child-registration__actions">
+                  <span role="status">{registrationDraftSaving ? 'جارٍ حفظ إجاباتك…' : 'تُحفظ الإجابات تلقائيًا'}</span>
+                  <button type="button" className="button button--primary"
+                    disabled={!registrationQuestionsComplete(childRegistration) || registrationDraftSaving}
+                    onClick={() => setChildRegistration((current) => current ? ({ ...current, step: 'review' }) : current)}>
+                    مراجعة الإجابات
+                  </button>
+                </div>
+              </div>
+            ) : childRegistration.step === 'review' ? (
+              <div className="child-registration__panel">
+                <h4>راجع إجاباتك</h4>
+                <p>يمكنك تعديل إجابتك قبل احتساب التوصية.</p>
+                {childRegistration.questionnaire.questions.map((question) => {
+                  const labels = answerLabels(question);
+                  return (
+                    <article className="child-registration__review-item" key={question.id}>
+                      <strong>{question.text}</strong>
+                      <span>{labels.length ? labels.join('، ') : 'لم تتم الإجابة (اختياري)'}</span>
+                    </article>
+                  );
+                })}
+                <div className="child-registration__actions">
+                  <button type="button" className="button button--outline"
+                    onClick={() => setChildRegistration((current) => current ? ({ ...current, step: 'questionnaire' }) : current)}>
+                    تعديل الإجابات
+                  </button>
+                  <button type="button" className="button button--primary"
+                    disabled={learningSetupBusy || registrationDraftSaving}
+                    onClick={() => void previewNewChildPaths()}>
+                    {learningSetupBusy ? 'جارٍ تحديد المسار…' : 'مراجعة الإجابات وتحديد المسار'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="child-registration__panel">
+                <h4>المسار التعليمي المقترح لطفلك</h4>
+                <p>بناءً على الإجابات التي قدمتها، نقترح أن يبدأ طفلك بالمسار التالي. يمكنك مراجعة الأنشطة والاختيار قبل التأكيد.</p>
+                {childRegistration.recommendations.recommendations.map((recommendation) => (
+                  <label className="dashboard-learning-recommendation" key={recommendation.key}>
+                    <input type="checkbox"
+                      checked={childRegistration.selectedPathKeys.includes(recommendation.key)}
+                      onChange={(event) => setChildRegistration((current) => current ? ({
+                        ...current,
+                        selectedPathKeys: event.target.checked
+                          ? [...current.selectedPathKeys, recommendation.key]
+                          : current.selectedPathKeys.filter((key) => key !== recommendation.key)
+                      }) : current)} />
+                    <span>
+                      <strong>{recommendation.title}{recommendation.assignmentType === 'complementary' ? ' · مسار تكميلي' : ' · المسار الأساسي'}</strong>
+                      <small>{recommendation.description}</small>
+                      <small>أهداف التعلّم: {(recommendation.objectives ?? []).map((skillId) => learningSkillLabels[skillId] ?? skillId).join('، ') || 'أهداف تعليمية متدرجة'}</small>
+                      <small>سبب الاقتراح: {recommendation.reason}</small>
+                      <small>الأنشطة: {recommendation.activities.map((activity) => activity.title).join('، ')}</small>
+                    </span>
+                  </label>
+                ))}
+                {childRegistration.recommendations.recommendations.length === 0 && (
+                  <ProgressNotice>لا يوجد مسار مناسب متاح الآن. يمكنك مراجعة إجاباتك أو الانتظار حتى يراجع المسؤول إعداد المسارات.</ProgressNotice>
+                )}
+                <label className="child-registration__consent">
+                  <input type="checkbox" checked={registrationConsent}
+                    onChange={(event) => setRegistrationConsent(event.target.checked)} />
+                  <span>أوافق على حفظ إجابات هذا الاستبيان ونتائج أنشطة التعلّم لهذا الملف. يمكنني إدارة الموافقة لاحقًا من ملف الطفل.</span>
+                </label>
+                <p className="dashboard-privacy-note">هذا المسار اقتراح تعليمي مبني على إجابات وليّ الأمر، ويمكن تعديله وفقًا لاحتياجات الطفل ومتابعة تقدمه. ولا يُعد تشخيصًا طبيًا.</p>
+                <div className="child-registration__actions">
+                  <button type="button" className="button button--outline"
+                    disabled={learningSetupBusy}
+                    onClick={() => setChildRegistration((current) => current ? ({ ...current, step: 'review' }) : current)}>
+                    العودة للمراجعة
+                  </button>
+                  <button type="button" className="button button--primary"
+                    disabled={learningSetupBusy || registrationDraftSaving || !registrationConsent
+                      || (childRegistration.recommendations.recommendations.length > 0
+                        && childRegistration.selectedPathKeys.length === 0)}
+                    onClick={() => void completeNewChildRegistration()}>
+                    {learningSetupBusy
+                      ? 'جارٍ إكمال الإعداد…'
+                      : childRegistration.recommendations.recommendations.length
+                        ? 'تأكيد المسار وبدء رحلة الطفل'
+                        : 'حفظ الإجابات وإرسالها للمراجعة'}
+                  </button>
+                </div>
+              </div>
+            )}
+            <button type="button" className="auth-text-button"
+              onClick={() => {
+                setChildRegistration(null);
+                setSection('children');
+              }}>إيقاف مؤقت والعودة</button>
+          </section>
+        );
+      }
+      return (
+        <form className="auth-form child-form dashboard-form" onSubmit={saveChild}>
+          {!editingChild && renderChildAllowance()}
+          <p className="auth-description">
+            نطلب اسمًا مختصرًا فقط، ويمكنك اختيار مشاركة الفئة العمرية واستخدام رمز حيوان بدل رفع صورة شخصية.
+          </p>
+          <label>الاسم الذي تفضل استخدامه
+            <input
+              name="displayName"
+              required
+              minLength="1"
+              maxLength="50"
+              autoComplete="off"
+              defaultValue={editingChild?.displayName ?? ''}
+            />
+          </label>
+          <label>الفئة العمرية (اختياري)
+            <select name="ageBand" defaultValue={editingChild?.ageBand ?? ''}>
+              {ageBands.map((band) => <option value={band.value} key={band.value}>{band.label}</option>)}
+            </select>
+          </label>
+          <label>الصورة الرمزية (اختياري)
+            <select name="avatar" defaultValue={editingChild?.avatar ?? ''}>
+              {avatars.map((avatar) => (
+                <option value={avatar.value} key={avatar.value}>{avatar.emoji} {avatar.label}</option>
+              ))}
+            </select>
+          </label>
+          <button className="button button--primary auth-submit" disabled={busy || (!editingChild && !childAllowance?.canAddChild)}>
+            {editingChild ? 'حفظ التعديلات' : 'إضافة طفل'}
+          </button>
+          <button type="button" className="auth-text-button" onClick={() => selectSection(editingChild ? 'profile' : 'children')}>
+            إلغاء والعودة
+          </button>
+        </form>
+      );
+    }
+
+    if (section === 'profile') {
+      return selectedChild ? (
+        <section className="dashboard-section">
+          <article className="dashboard-profile-card">
+            <span className="dashboard-avatar dashboard-avatar--large" aria-hidden="true">{avatarFor(selectedChild.avatar)}</span>
+            <div>
+              <span className="dashboard-eyebrow">ملف الطفل</span>
+              <h3>{selectedChild.displayName}</h3>
+              <p>{ageBands.find((band) => band.value === selectedChild.ageBand)?.label ?? 'الفئة العمرية غير مشاركة'}</p>
+              <span className="child-status">{selectedChild.status === 'active' ? 'ملف نشط' : 'ملف متوقف مؤقتًا'}</span>
+            </div>
+          </article>
+          <div className="dashboard-profile-actions">
+            {selectedChild.status === 'active' && (
+              <a className="button button--primary" href={`/games?childId=${encodeURIComponent(selectedChild.id)}`}>
+                ابدأ نشاطًا تعليميًا
+              </a>
+            )}
+            <button type="button" className="button button--outline" onClick={() => startEdit(selectedChild)}>تعديل الملف</button>
+            <button type="button" className="button button--outline" onClick={() => selectSection('progress')}>عرض التقدم</button>
+            <button type="button" className="button button--outline" onClick={() => {
+              selectSection('progress');
+              startLearningSetup();
+            }}>تحديث بيانات وتقييم الطفل</button>
+            <button type="button" className="button button--outline" onClick={() => selectSection('activity')}>سجل الأنشطة</button>
+            <button type="button" className="button button--outline" disabled={busy} onClick={() => toggleConsents(selectedChild)}>
+              {consentChildId === selectedChild.id ? 'إخفاء الموافقات' : 'إدارة الموافقات'}
+            </button>
+            {selectedChild.status === 'active' && (
+              <button type="button" className="button button--outline" disabled={busy}
+                onClick={() => void removeChild(selectedChild)}>إزالة الطفل من حسابي</button>
+            )}
+          </div>
+          {consentChildId === selectedChild.id && renderConsentControls(selectedChild)}
+          <p className="dashboard-privacy-note">
+            لا يحتوي الملف على تاريخ ميلاد دقيق أو بيانات صحية. لا يمكن للوالدين الوصول إلى ملفات أسر أخرى.
+          </p>
+        </section>
+      ) : <ProgressNotice>أضف ملف طفل لعرض تفاصيله هنا.</ProgressNotice>;
+    }
+
+    if (section === 'progress') {
+      const progressSummary = summarizeProgressActivities(learningProgress?.paths);
+      const performancePoints = getPerformanceChartPoints(progressAnalytics?.buckets);
+      const performancePath = performanceChartPath(performancePoints);
+      const performanceArea = performancePoints.length > 1
+        ? `${performancePath} L ${performancePoints.at(-1).x} 226 L ${performancePoints[0].x} 226 Z`
+        : '';
+      const activitiesById = new Map((learningProgress?.paths ?? [])
+        .flatMap((path) => (path.activities ?? []).map((activity) => [
+          activity.gameId,
+          { ...activity, learningPathTitle: path.title }
+        ])));
+      const journeyGroups = [...(learningJourney?.levels ?? []).reduce((groups, level) => {
+        const pathLevels = groups.get(level.learningPathKey) ?? [];
+        pathLevels.push(level);
+        groups.set(level.learningPathKey, pathLevels);
+        return groups;
+      }, new Map()).entries()].map(([key, levels]) => ({
+        key,
+        title: levels[0]?.learningPathTitle ?? key,
+        levels: levels.sort((left, right) => left.sortOrder - right.sortOrder)
+      }));
+      const assignedActivities = (learningProgress?.paths ?? []).flatMap((path) => (
+        (path.activities ?? []).map((activity) => ({ ...activity, learningPathTitle: path.title }))
+      ));
+      const strongActivities = assignedActivities.filter((activity) => (
+        activity.status === 'completed' && activity.attemptCount > 0 && activity.recentAccuracyPercent !== null
+      ));
+      const practiceActivities = assignedActivities.filter((activity) => (
+        activity.status !== 'completed' && activity.attemptCount > 0
+      ));
+      return selectedChild ? (
+        <section className="dashboard-section">
+          <div className="dashboard-section-heading">
+            <div>
+              <h3>التقدم التعليمي</h3>
+              <p>ملخص رحلة {selectedChild.displayName} التعليمية من الأنشطة والمحاولات المسجلة.</p>
+            </div>
+            <div className="dashboard-section-heading__actions">
+              <label className="dashboard-progress-child-picker">ملف الطفل
+                <select value={selectedChildId} onChange={(event) => setSelectedChildId(event.target.value)}>
+                  {children.filter((child) => child.status === 'active').map((child) => (
+                    <option value={child.id} key={child.id}>{child.displayName}</option>
+                  ))}
+                </select>
+              </label>
+              <button type="button" className="button button--small button--outline" onClick={() => selectSection('activity')}>كل الأنشطة</button>
+              <button type="button" className="button button--small button--primary" disabled={learningSetupBusy || selectedChild.status !== 'active'} onClick={startLearningSetup}>
+                {learningSetupBusy ? 'جارٍ التحميل…' : 'تحديث بيانات وتقييم الطفل'}
+              </button>
+            </div>
+          </div>
+          {learningSetup && (
+            <form className="dashboard-learning-setup" onSubmit={previewLearningPaths}>
+              <div>
+                <h4>تحديث الاستبيان</h4>
+                <p>تُستخدم إجاباتك لاقتراح أنشطة تعليمية فقط. الإجابات السابقة محفوظة، وأي توصية جديدة لن تغيّر المسار الحالي حتى تختار حفظها.</p>
+                {learningSetup.previousResponse && (
+                  <small>آخر إجابة محفوظة: {formatDate(learningSetup.previousResponse.createdAt)}</small>
+                )}
+              </div>
+              {learningSetup.questionnaire.questions.map((question) => (
+                <fieldset key={question.id}>
+                  <legend>{question.text}{question.required ? ' · مطلوب' : ' · اختياري'}</legend>
+                  {question.helpText && <p>{question.helpText}</p>}
+                  {question.options.map((option) => (
+                    <label className="dashboard-learning-answer" key={option.id}>
+                      <input
+                        type={question.type === 'multiple' ? 'checkbox' : 'radio'}
+                        name={question.id}
+                        value={option.id}
+                        checked={question.type === 'multiple'
+                          ? (learningSetup.answers[question.id] ?? []).includes(option.id)
+                          : learningSetup.answers[question.id] === option.id}
+                        onChange={(event) => setLearningAnswer(question, option.id, event.target.checked)}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              ))}
+              <div className="dashboard-learning-setup__actions">
+                <button type="submit" className="button button--primary" disabled={learningSetupBusy}>
+                {learningSetupBusy ? 'جارٍ إعداد الاقتراحات…' : 'عرض التوصيات الجديدة'}
+                </button>
+                <button type="button" className="button button--outline" disabled={learningSetupBusy} onClick={() => setLearningSetup(null)}>إلغاء</button>
+              </div>
+              {learningSetup.recommendations && (
+                <div className="dashboard-learning-recommendations">
+                  <h4>المسارات المقترحة</h4>
+                  <p>{learningSetup.recommendations.note}</p>
+                  {learningSetup.recommendations.recommendations.map((recommendation) => (
+                    <label className="dashboard-learning-recommendation" key={recommendation.key}>
+                      <input
+                        type="checkbox"
+                        checked={learningSetup.selectedPathKeys.includes(recommendation.key)}
+                        onChange={(event) => setLearningSetup((current) => ({
+                          ...current,
+                          selectedPathKeys: event.target.checked
+                            ? [...current.selectedPathKeys, recommendation.key]
+                            : current.selectedPathKeys.filter((key) => key !== recommendation.key)
+                        }))}
+                      />
+                      <span>
+                        <strong>{recommendation.title}</strong>
+                        <small>{recommendation.description}</small>
+                        <small>سبب الاقتراح: {recommendation.reason}</small>
+                      </span>
+                    </label>
+                  ))}
+                  {learningSetup.recommendations.recommendations.length === 0 && (
+                    <ProgressNotice>لا توجد مسارات منشورة تطابق هذه الاختيارات حاليًا. يمكنك مراجعة الاستبيان لاحقًا.</ProgressNotice>
+                  )}
+                  {!currentConsent('learning_data') && (
+                    <div className="dashboard-consent-prompt">
+                      <p>لم تُفعّل موافقة حفظ أنشطة التعلّم. يمكنك معاينة التوصيات، لكن يلزم تفعيل الموافقة من ملف الطفل لحفظ الإجابات والتعيينات.</p>
+                      <button type="button" className="button button--outline" onClick={() => selectSection('profile')}>مراجعة موافقات الملف</button>
+                    </div>
+                  )}
+                  {learningSetup.selectedPathKeys.length > 0 && (
+                    <button type="button" className="button button--primary"
+                      disabled={learningSetupBusy || !currentConsent('learning_data')}
+                      onClick={() => void confirmLearningPaths()}>
+                      {learningSetupBusy ? 'جارٍ الحفظ…' : 'تأكيد المسارات المختارة'}
+                    </button>
+                  )}
+                  <button type="button" className="button button--outline"
+                    disabled={learningSetupBusy || !currentConsent('learning_data')}
+                    onClick={() => void confirmLearningPaths({ keepCurrentPath: true })}>
+                    {learningSetup.recommendations.recommendations.length
+                      ? 'حفظ الإجابات والاحتفاظ بالمسار الحالي'
+                      : 'حفظ الإجابات دون تغيير المسارات'}
+                  </button>
+                </div>
+              )}
+            </form>
+          )}
+          {loadingLearningProgress ? (
+            <p className="dashboard-loading" role="status">جارٍ تحميل مسار التعلّم…</p>
+          ) : learningProgressMessage ? (
+            <ProgressNotice>{learningProgressMessage}</ProgressNotice>
+          ) : learningProgress ? (
+            <>
+              <p className="dashboard-privacy-note">{learningProgress.note}</p>
+              <section className="dashboard-progress-analytics" aria-label="ملخص التقدم التعليمي">
+                <div className="dashboard-progress-metrics">
+                  <article className="dashboard-progress-metric dashboard-progress-metric--teal">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">◷</span>
+                    <div><small>محاولات الألعاب المسجلة</small>
+                      <strong>{loadingAttempts ? '…' : attemptTotal}</strong>
+                      <p>إجمالي محاولات هذا الطفل</p>
+                    </div>
+                  </article>
+                  <article className="dashboard-progress-metric dashboard-progress-metric--purple">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">✦</span>
+                    <div><small>إجمالي النجوم المكتسبة</small>
+                      <strong>{rewardSummary ? rewardSummary.totalStars : '—'}</strong>
+                      <p>مكافآت تشجيعية وليست مقياسًا للتعلّم</p>
+                    </div>
+                  </article>
+                  <article className="dashboard-progress-metric dashboard-progress-metric--orange">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">✓</span>
+                    <div><small>أنشطة تعليمية مكتملة</small>
+                      <strong>{progressSummary.total ? progressSummary.completed : '—'}</strong>
+                      <p>{progressSummary.total ? `من ${progressSummary.total} نشاطًا معينًا` : 'لا توجد أنشطة معينة'}</p>
+                    </div>
+                  </article>
+                  <article className="dashboard-progress-metric dashboard-progress-metric--sky">
+                    <span className="dashboard-progress-metric__icon" aria-hidden="true">▦</span>
+                    <div><small>أيام تعلّم نشطة</small>
+                      <strong>{loadingProgressAnalytics ? '…' : progressAnalyticsError ? '—' : progressAnalytics?.activeDays ?? '—'}</strong>
+                      <p>خلال {progressPeriod === 'weekly' ? 'آخر ٧ أيام' : 'آخر ٣٠ يومًا'}</p>
+                    </div>
+                  </article>
+                </div>
+
+                <div className="dashboard-progress-charts">
+                  <section className="dashboard-progress-chart-card" aria-labelledby="progress-skills-title">
+                    <div className="dashboard-progress-chart-heading">
+                      <div><h4 id="progress-skills-title">الأنشطة المرتبطة بالمهارات</h4>
+                        <p>نسبة الأنشطة المكتملة لكل مهارة ضمن المسارات الحالية.</p></div>
+                    </div>
+                    {progressSummary.skills.length ? (
+                      <div className="dashboard-skill-bars">
+                        {progressSummary.skills.map((skill, index) => (
+                          <div className="dashboard-skill-bar" key={skill.id}
+                            title={`${skill.completed} من ${skill.activities} أنشطة مكتملة · ${skill.attempts} محاولة مسجلة`}>
+                            <div className="dashboard-skill-bar__label">
+                              <strong>{skill.label}</strong><span>{skill.completionPercent}٪</span>
+                            </div>
+                            <div className="dashboard-skill-bar__track" role="progressbar"
+                              aria-label={`${skill.label}: الأنشطة المكتملة`}
+                              aria-valuemin="0" aria-valuemax="100" aria-valuenow={skill.completionPercent}
+                              aria-valuetext={`${skill.completed} من ${skill.activities} أنشطة مكتملة`}>
+                              <span style={{ width: `${skill.completionPercent}%`, '--skill-color': ['#2aa89b', '#8474cf', '#65a9dc', '#e6a14a', '#5d83ca', '#cf7ea1'][index % 6] }} />
+                            </div>
+                            <small>{skill.completed} من {skill.activities} أنشطة مكتملة · {skill.attempts} محاولة مسجلة</small>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <ProgressNotice>لا تتوفر مهارات مرتبطة بالأنشطة المعينة لهذا الطفل حتى الآن.</ProgressNotice>
+                    )}
+                    <p className="dashboard-privacy-note">هذا ملخص لإنجاز الأنشطة المرتبطة، ولا يثبت تحسنًا لغويًا أو تشخيصيًا.</p>
+                  </section>
+
+                  <section className="dashboard-progress-chart-card" aria-labelledby="progress-performance-title">
+                    <div className="dashboard-progress-chart-heading">
+                      <div><h4 id="progress-performance-title">الأداء الفعلي عبر المحاولات</h4>
+                        <p>كل خط يعرض لعبة واحدة فقط لتجنّب خلط أنظمة التقييم المختلفة.</p></div>
+                      <div className="dashboard-performance-controls">
+                        <label className="dashboard-performance-game-picker">اللعبة
+                          <select value={performanceGameId} onChange={(event) => setPerformanceGameId(event.target.value)}
+                            disabled={!progressAnalytics?.games?.length}>
+                            {!performanceGameId && <option value="">اختر لعبة</option>}
+                            {(progressAnalytics?.games ?? []).map(({ gameId }) => (
+                              <option value={gameId} key={gameId}>
+                                {activitiesById.get(gameId)?.title ?? gameNames[gameId] ?? gameId}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <div className="dashboard-period-filter" aria-label="الفترة الزمنية">
+                          <button type="button" aria-pressed={progressPeriod === 'weekly'}
+                            onClick={() => setProgressPeriod('weekly')}>أسبوع</button>
+                          <button type="button" aria-pressed={progressPeriod === 'monthly'}
+                            onClick={() => setProgressPeriod('monthly')}>شهر</button>
+                        </div>
+                      </div>
+                    </div>
+                    {loadingProgressAnalytics ? (
+                      <p className="dashboard-loading" role="status">جارٍ تحميل المحاولات المحفوظة…</p>
+                    ) : progressAnalyticsError ? (
+                      <ProgressNotice>{progressAnalyticsError}</ProgressNotice>
+                    ) : performancePoints.length ? (
+                      <>
+                        <div className="dashboard-performance-chart-wrap">
+                          <svg className="dashboard-performance-chart" viewBox="0 0 760 280"
+                            role="img" aria-label={`متوسط نتائج المحاولات المسجلة خلال ${progressPeriod === 'weekly' ? 'الأسبوع' : 'الشهر'}`}>
+                            {[0, 25, 50, 75, 100].map((value) => {
+                              const y = 226 - (value / 100) * 202;
+                              return <g key={value}>
+                                <line x1="64" x2="744" y1={y} y2={y} className="dashboard-performance-chart__grid" />
+                                <text x="50" y={y + 4} textAnchor="end" className="dashboard-performance-chart__axis-label">{value}٪</text>
+                              </g>;
+                            })}
+                            {performanceArea && <path d={performanceArea} className="dashboard-performance-chart__area" />}
+                            {performancePath && <path d={performancePath} className="dashboard-performance-chart__line" />}
+                            {performancePoints.map((point) => (
+                              <g key={point.date}>
+                                <circle cx={point.x} cy={point.y} r="6" className="dashboard-performance-chart__point">
+                                  <title>{`${new Intl.DateTimeFormat('ar-EG', { dateStyle: 'long' }).format(new Date(point.date))}: ${point.averageScore}٪ متوسط من ${point.attempts} محاولة`}</title>
+                                </circle>
+                                <text x={point.x} y="257" textAnchor="middle" className="dashboard-performance-chart__date">
+                                  {formatPerformanceDate(point.date, progressPeriod)}
+                                </text>
+                              </g>
+                            ))}
+                          </svg>
+                        </div>
+                        <p className="dashboard-privacy-note">المتوسط محسوب من نتائج المحاولات المحفوظة فعلًا، وهو وصف للنشاط وليس تقييمًا لقدرات الطفل.</p>
+                      </>
+                    ) : (
+                      <ProgressNotice>{progressAnalytics?.games?.length
+                        ? 'لا توجد محاولات محفوظة لهذه اللعبة في الفترة المحددة.'
+                        : 'لا توجد محاولات محفوظة في هذه الفترة. ستظهر نتائج اللعبة هنا بعد تسجيل محاولات جديدة.'}</ProgressNotice>
+                    )}
+                  </section>
+                </div>
+              </section>
+              {learningJourney && (
+                <section className="dashboard-learning-journey" aria-label="رحلة التعلّم">
+                  <div className="dashboard-learning-journey__heading">
+                    <div><h4>رحلة التعلّم</h4>
+                      <p>مستويات وأنشطة المسارات المعينة، مع إظهار المكافآت التي سُجلت فعلًا.</p></div>
+                    <span className="dashboard-learning-journey__stars">✦ {rewardSummary?.totalStars ?? '—'} نجمة</span>
+                  </div>
+                  {journeyGroups.length ? journeyGroups.map((journey) => {
+                    const completedCount = journey.levels.filter(({ status }) => status === 'completed').length;
+                    const currentLevel = journey.levels.find(({ status }) => status === 'in-progress')
+                      ?? journey.levels.find(({ status }) => status === 'available');
+                    return (
+                      <article className="dashboard-journey-path" key={journey.key}>
+                        <div className="dashboard-journey-path__heading">
+                          <div><h5>{journey.title}</h5>
+                            <span>{completedCount} من {journey.levels.length} مستويات مكتملة
+                              {currentLevel ? ` · المستوى الحالي: ${currentLevel.title}` : ''}
+                            </span></div>
+                        </div>
+                        <div className="dashboard-journey-levels">
+                          {journey.levels.map((level) => {
+                            const isCurrent = currentLevel?.id === level.id;
+                            const statusLabel = level.status === 'completed' ? 'مكتمل'
+                              : isCurrent ? 'المستوى الحالي'
+                                : level.status === 'locked' ? 'قادم ومقفل' : 'متاح';
+                            return (
+                              <article className={`dashboard-journey-level is-${level.status}${isCurrent ? ' is-current' : ''}`}
+                                key={level.id}>
+                                <div className="dashboard-journey-level__top">
+                                  <span className="dashboard-journey-level__marker" aria-hidden="true">
+                                    {level.status === 'completed' ? '✓' : level.status === 'locked' ? '·' : level.sortOrder + 1}
+                                  </span>
+                                  <small>{statusLabel}</small>
+                                </div>
+                                <strong>{level.title}</strong>
+                                {level.status !== 'locked' && (
+                                  <div className="dashboard-journey-level__progress">
+                                    <div role="progressbar" aria-label={`إكمال ${level.title}`}
+                                      aria-valuemin="0" aria-valuemax="100"
+                                      aria-valuenow={level.completionPercent}
+                                      aria-valuetext={`${level.completionPercent}% مكتمل`}>
+                                      <span style={{ width: `${level.completionPercent}%` }} />
+                                    </div>
+                                    <small>{level.completionPercent}% · {level.completedGameIds.length} ألعاب مكتملة
+                                      {level.status !== 'completed' ? ` · ${level.remainingRequiredGames} مطلوبة` : ''}
+                                    </small>
+                                  </div>
+                                )}
+                                {level.status === 'completed' && level.completedAt && (
+                                  <time dateTime={level.completedAt}>{formatDate(level.completedAt)}</time>
+                                )}
+                                {level.earnedRewards?.length > 0 && (
+                                  <div className="dashboard-journey-level__rewards">
+                                    {level.earnedRewards.map((reward, index) => (
+                                      <span key={`${level.id}-${reward.type}-${reward.awardedAt}-${index}`}>
+                                        {reward.type === 'stars' ? `✦ ${reward.quantity} نجمة` : reward.name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </article>
+                    );
+                  }) : (
+                    <ProgressNotice>لا توجد مستويات منشورة ضمن المسارات المعينة حاليًا.</ProgressNotice>
+                  )}
+                  <p className="dashboard-privacy-note">النجوم والشارات والهدايا مكافآت تفاعلية، وليست قياسًا لتطور اللغة أو القدرات.</p>
+                </section>
+              )}
+              {learningProgress.paths.length === 0 ? (
+                <ProgressNotice>لم تُعيّن مسارات لهذا الطفل بعد. ابدأ بإعداد الاستبيان لرؤية توصيات مناسبة.</ProgressNotice>
+              ) : learningProgress.paths.map((path) => (
+                <section className="dashboard-assigned-path" key={path.key}>
+                  <div className="dashboard-assigned-path__summary">
+                    <div><span>{path.assignmentType === 'primary' ? 'المسار الأساسي' : path.assignmentType === 'complementary' ? 'مسار تكميلي' : 'مسار سابق'}</span>
+                      <h4>{path.title}</h4>
+                      <p>{path.description}</p>
+                    </div>
+                    <strong>{path.summary.completedActivities}<small> / {path.summary.totalActivities} نشاط</small></strong>
+                  </div>
+                  <details className="dashboard-assigned-path__details">
+                    <summary>تفاصيل أنشطة المسار</summary>
+                    <div className="dashboard-learning-activities">
+                      {path.activities.map((activity) => (
+                        <article className="dashboard-attempt" key={activity.gameId}>
+                          <div>
+                            <h4>{activity.title}</h4>
+                            <span>{activity.learningArea} · {activity.status === 'completed'
+                              ? 'مكتمل'
+                              : activity.status === 'available' ? 'متاح الآن' : 'قادم'}</span>
+                          </div>
+                          <p>{activity.suggestionReason ?? activity.description}</p>
+                          {activity.attemptCount > 0 && (
+                            <small>محاولات مسجلة: {activity.attemptCount}
+                              {activity.recentAccuracyPercent !== null
+                                ? ` · الدقة في أحدث المحاولات: ${activity.recentAccuracyPercent}%`
+                                : ''}
+                            </small>
+                          )}
+                          {['active', 'completed'].includes(path.status) && activity.status !== 'upcoming' && (
+                            <a className="button button--small button--outline" href={`/games/${encodeURIComponent(activity.gameId)}?childId=${encodeURIComponent(selectedChild.id)}`}>
+                              {activity.status === 'completed' ? 'تكرار النشاط' : 'ابدأ النشاط'}
+                            </a>
+                          )}
+                        </article>
+                      ))}
+                    </div>
+                  </details>
+                </section>
+              ))}
+            </>
+          ) : (
+            <ProgressNotice>لا يوجد مسار تعلّم منشور حاليًا.</ProgressNotice>
+          )}
+          {learningProgress && !learningProgressMessage && (
+            <section className="dashboard-practice-recommendations" aria-label="أنشطة للمراجعة">
+              <article className="dashboard-practice-card dashboard-practice-card--strength">
+                <div><span aria-hidden="true">✦</span><div><h4>أنشطة حققت معيار المسار</h4>
+                  <p>إنجازات مسجلة وفق معايير المسارات، وليست حكمًا سريريًا على قدرات الطفل.</p></div></div>
+                {strongActivities.length ? strongActivities.slice(0, 3).map((activity, index) => (
+                  <div className="dashboard-practice-item" key={`strength-${activity.gameId}-${activity.learningPathTitle}-${index}`}>
+                    <strong>{activity.title}</strong><small>{activity.learningPathTitle} · {activity.attemptCount} محاولات مسجلة</small>
+                    <span>أحدث دقة مسجلة في هذا النشاط: {activity.recentAccuracyPercent}%</span>
+                  </div>
+                )) : <ProgressNotice>ستظهر هنا الأنشطة التي أُكمل معيارها بناءً على المحاولات المسجلة.</ProgressNotice>}
+              </article>
+              <article className="dashboard-practice-card dashboard-practice-card--practice">
+                <div><span aria-hidden="true">↗</span><div><h4>أنشطة قد تستفيد من ممارسة إضافية</h4>
+                  <p>اقتراحات مشجعة للأنشطة التي لديها محاولات مسجلة ولم يكتمل معيارها بعد.</p></div></div>
+                {practiceActivities.length ? practiceActivities.slice(0, 3).map((activity, index) => (
+                  <div className="dashboard-practice-item" key={`practice-${activity.gameId}-${activity.learningPathTitle}-${index}`}>
+                    <strong>{activity.title}</strong><small>{activity.learningPathTitle} · {activity.attemptCount} محاولات مسجلة</small>
+                    {activity.recentAccuracyPercent !== null && (
+                      <span>أحدث دقة مسجلة في هذا النشاط: {activity.recentAccuracyPercent}%</span>
+                    )}
+                  </div>
+                )) : <ProgressNotice>لا توجد أنشطة غير مكتملة لها محاولات مسجلة حاليًا.</ProgressNotice>}
+              </article>
+            </section>
+          )}
+        </section>
+      ) : <ProgressNotice>اختر ملف طفل لعرض تقدمه.</ProgressNotice>;
+    }
+
+    if (section === 'activity') {
+      return selectedChild ? (
+        <section className="dashboard-section">
+          <div className="dashboard-section-heading">
+            <div>
+              <h3>سجل الأنشطة · {selectedChild.displayName}</h3>
+              <p>يعرض السجل محاولات الألعاب المسجلة لهذا الملف فقط.</p>
+            </div>
+            <label className="dashboard-filter">تصفية حسب اللعبة
+              <select
+                value={gameFilter}
+                onChange={(event) => {
+                  setGameFilter(event.target.value);
+                  setAttemptPage(1);
+                }}
+              >
+                <option value="">كل الألعاب</option>
+                <option value="word-sounds">فقاعات الأصوات</option>
+                <option value="word-match">صندوق الكلمات</option>
+                <option value="matching-pairs">لعبة توصيل الصور</option>
+                <option value="animal-sounds">اسمع صوت الحيوان</option>
+              </select>
+            </label>
+          </div>
+          {renderAttemptList()}
+        </section>
+      ) : <ProgressNotice>اختر ملف طفل لعرض سجل الأنشطة.</ProgressNotice>;
+    }
+
+    if (section === 'reports') {
+      if (!selectedChild) return <ProgressNotice>اختر ملف طفل لإدارة التقارير.</ProgressNotice>;
+      const childReports = appointments.filter((appointment) => (
+        appointment.childId === selectedChild.id
+        && appointment.parentProgressReport?.status === 'published'
+        && (!reportDateFilter || new Intl.DateTimeFormat('en-CA', {
+          timeZone: appointment.timeZone,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        }).format(new Date(appointment.startsAt)) === reportDateFilter)
+      ));
+      return (
+        <section className="dashboard-section">
+          <div className="dashboard-section-heading">
+            <div>
+              <h3>تقارير الجلسات · {selectedChild.displayName}</h3>
+              <p>تقارير الجلسات المنشورة من الأخصائيين.</p>
+            </div>
+            <label className="dashboard-session-reports__date-filter">
+              تصفية بتاريخ الجلسة
+              <input type="date" value={reportDateFilter}
+                onChange={(event) => setReportDateFilter(event.target.value)} />
+            </label>
+          </div>
+          {!currentConsent('progress_reports') && (
+            <div className="dashboard-consent-prompt">
+              <p>لم تمنح موافقة إعداد تقارير التقدم لهذا الملف. يمكنك مراجعة الموافقات من صفحة الملف الشخصي.</p>
+              <button type="button" className="button button--outline" onClick={() => selectSection('profile')}>مراجعة الموافقات</button>
+            </div>
+          )}
+          {!currentConsent('progress_reports')
+            ? <ProgressNotice>لا توجد تقارير معروضة. موافقة التقارير منفصلة عن موافقة حفظ أنشطة التعلّم.</ProgressNotice>
+            : loadingAppointments
+              ? <p className="dashboard-loading" role="status">جارٍ تحميل التقارير…</p>
+              : childReports.length === 0
+                ? <ProgressNotice>{reportDateFilter
+                  ? 'لا توجد تقارير منشورة في هذا التاريخ.'
+                  : 'لا يوجد تقرير أخصائي منشور لهذا الملف حتى الآن.'}</ProgressNotice>
+                : <div className="dashboard-session-reports">
+                  {childReports.map((appointment) => {
+                    const report = appointment.parentProgressReport;
+                    const reportSections = [
+                      ['ملخص الجلسة', report.sessionSummary || report.summary],
+                      ['أهداف الجلسة', report.sessionGoals],
+                      ['الأنشطة المنفذة', report.activitiesPerformed],
+                      ['ملاحظات الأخصائي', report.specialistObservations],
+                      ['الإنجازات الإيجابية', report.positiveAchievements],
+                      ['نقاط تحتاج إلى تدريب إضافي', report.furtherPractice],
+                      ['توصيات لولي الأمر', report.parentRecommendations],
+                      ['خطة الجلسة القادمة', report.nextSessionPlan]
+                    ];
+                    return (
+                      <article className="dashboard-session-report" key={appointment.id}>
+                        <div className="dashboard-session-report__meta">
+                          <h4>{appointment.childName || selectedChild.displayName}</h4>
+                          <span className="dashboard-session-report__status">منشور</span>
+                        </div>
+                        <p>الأخصائي: {displayNameOrFallback(appointment.specialistName)}</p>
+                        <p>تاريخ الجلسة: {formatDate(appointment.startsAt)}</p>
+                        <p>تاريخ النشر: {formatDate(report.publishedAt ?? report.createdAt)}</p>
+                        <details className="dashboard-session-report__details">
+                          <summary>عرض التقرير الكامل</summary>
+                          <div className="dashboard-session-report__content">
+                            {reportSections.map(([title, content]) => content
+                              ? <section key={title}><h5>{title}</h5><p>{content}</p></section>
+                              : <section key={title}><h5>{title}</h5><p>لم يضف الأخصائي تفاصيل لهذا القسم.</p></section>)}
+                            {report.suggestedActivities?.length > 0 && (
+                              <section><h5>أنشطة مقترحة</h5>
+                                <ul>{report.suggestedActivities.map((activity) => <li key={activity}>{activity}</li>)}</ul>
+                              </section>
+                            )}
+                            <small>هذا التقرير تعليمي ولا يمثل تشخيصًا طبيًا.</small>
+                          </div>
+                        </details>
+                      </article>
+                    );
+                  })}
+                </div>}
+        </section>
+      );
+    }
+
+    if (section === 'payments') {
+      const paymentMethodLabels = { vodafone_cash: 'Vodafone Cash', instapay: 'InstaPay' };
+      const paymentStatusLabels = {
+        pending: 'بانتظار مراجعة المسؤول',
+        reviewing: 'قيد المراجعة',
+        approved: 'تمت الموافقة',
+        rejected: 'مرفوض'
+      };
+      const subscriptionStatusLabels = {
+        active: 'نشط',
+        expired: 'منتهي',
+        scheduled: 'مجدول',
+        none: 'غير مشترك',
+        inactive: 'غير مشترك'
+      };
+      const enabledMethods = Object.entries(subscriptionPlan?.methods ?? {})
+        .filter(([, method]) => method.enabled);
+      const hasOpenPayment = paymentHistory.some((payment) => ['pending', 'reviewing'].includes(payment.status));
+      const subscriptionStatus = subscription?.status ?? 'inactive';
+      const formattedPrice = subscriptionPlan?.configured
+        ? new Intl.NumberFormat('ar-EG', {
+            style: 'currency',
+            currency: subscriptionPlan.currency,
+            maximumFractionDigits: 2
+          }).format(subscriptionPlan.amountMinor / 100)
+        : 'لم يتم إعداد السعر بعد';
+      const selectedAmountMinor = billingPeriod === 'annual'
+        ? subscriptionPlan?.annualAmountMinor
+        : subscriptionPlan?.amountMinor;
+      const selectedPrice = selectedAmountMinor
+        ? new Intl.NumberFormat('ar-EG', {
+            style: 'currency',
+            currency: subscriptionPlan.currency,
+            maximumFractionDigits: 2
+          }).format(selectedAmountMinor / 100)
+        : '';
+      return (
+        <section className="dashboard-section dashboard-billing">
+          <header className="dashboard-billing__hero">
+            <span className="dashboard-billing__hero-icon" aria-hidden="true">ج.م</span>
+            <div>
+              <span className="dashboard-eyebrow">إدارة عضويتك</span>
+              <h3>الاشتراك والمدفوعات</h3>
+              <p>تابع حالة اشتراكك وقدّم طلب التجديد بأمان.</p>
+            </div>
+            {!loadingBilling && (
+              <span className={`dashboard-billing__status dashboard-billing__status--${subscriptionStatus}`}>
+                <i aria-hidden="true" />
+                {subscriptionStatusLabels[subscriptionStatus] ?? 'غير مشترك'}
+              </span>
+            )}
+          </header>
+
+          {loadingBilling ? <p className="dashboard-loading" role="status">جارٍ تحميل بيانات الاشتراك والدفع…</p> : (
+            <div className="dashboard-billing__summary">
+              <article className="dashboard-billing__plan">
+                <div>
+                  <span className="dashboard-billing__eyebrow">الخطة {billingPeriod === 'annual' ? 'السنوية' : 'الشهرية'}</span>
+                  <strong>{billingPeriod === 'annual' && subscriptionPlan?.annualAmountMinor ? selectedPrice : formattedPrice}</strong>
+                  <p>
+                    اشتراك لمدة {billingPeriod === 'annual' ? '١٢ شهرًا' : 'شهر واحد'} للوصول إلى الألعاب التعليمية المنشورة،
+                    ويشمل حتى {billingPeriod === 'annual' ? (subscriptionPlan?.annualChildLimit ?? 4) : (subscriptionPlan?.monthlyChildLimit ?? 2)} ملفات أطفال نشطة.
+                  </p>
+                </div>
+                <span className="dashboard-billing__plan-icon" aria-hidden="true">✦</span>
+              </article>
+              <article className="dashboard-billing__term">
+                <span>{subscription?.status === 'scheduled' ? 'يبدأ الاشتراك في' : 'تاريخ انتهاء الاشتراك'}</span>
+                <strong>
+                  {subscription?.status === 'scheduled' && subscription.startsAt
+                    ? formatDate(subscription.startsAt)
+                    : subscription?.expiresAt
+                      ? formatDate(subscription.expiresAt)
+                      : 'لا يوجد اشتراك نشط'}
+                </strong>
+                <p>مدة الاشتراك {subscription?.period === 'annual' ? 'سنة كاملة' : 'شهر واحد'}، ويبدأ أي تجديد بعد انتهاء المدة الحالية.</p>
+              </article>
+            </div>
+          )}
+
+          {hasOpenPayment ? (
+            <div className="dashboard-billing__pending" role="status">
+              <span aria-hidden="true">◷</span>
+              <div>
+                <strong>طلبك قيد المراجعة</strong>
+                <p>لديك طلب دفع مفتوح بالفعل. ستظهر حالة المراجعة هنا؛ لا ترسل طلبًا آخر الآن.</p>
+              </div>
+            </div>
+          ) : subscriptionPlan?.configured && enabledMethods.length > 0 ? (
+            <form className="dashboard-payment-form dashboard-billing__form" onSubmit={submitPayment}>
+              <div className="dashboard-billing__form-heading">
+                <span aria-hidden="true">↗</span>
+                <div>
+                  <h4>اشترك أو جدّد الآن</h4>
+                  <p>حوّل قيمة الاشتراك باستخدام إحدى الطرق المتاحة، ثم أرسل بيانات التحويل للمراجعة.</p>
+                </div>
+              </div>
+              <label>طريقة الدفع
+                <select name="method" required defaultValue={enabledMethods[0][0]}>
+                  {enabledMethods.map(([methodId, method]) => (
+                    <option key={methodId} value={methodId}>{paymentMethodLabels[methodId]} — {method.recipient}</option>
+                  ))}
+                </select>
+              </label>
+              <fieldset className="dashboard-billing__period">
+                <legend>مدة الاشتراك</legend>
+                <label className={billingPeriod === 'monthly' ? 'is-selected' : ''}>
+                  <input type="radio" name="period" value="monthly" checked={billingPeriod === 'monthly'}
+                    onChange={() => setBillingPeriod('monthly')} />
+                  <span><strong>شهري</strong><small>{formattedPrice} · شهر واحد · حتى {subscriptionPlan?.monthlyChildLimit ?? 2} أطفال</small></span>
+                </label>
+                {subscriptionPlan?.annualAmountMinor && (
+                  <label className={billingPeriod === 'annual' ? 'is-selected' : ''}>
+                    <input type="radio" name="period" value="annual" checked={billingPeriod === 'annual'}
+                      onChange={() => setBillingPeriod('annual')} />
+                    <span><strong>سنوي</strong><small>{new Intl.NumberFormat('ar-EG', {
+                      style: 'currency',
+                      currency: subscriptionPlan.currency,
+                      maximumFractionDigits: 2
+                    }).format(subscriptionPlan.annualAmountMinor / 100)} · ١٢ شهرًا · حتى {subscriptionPlan?.annualChildLimit ?? 4} أطفال</small></span>
+                  </label>
+                )}
+              </fieldset>
+              <div className="dashboard-payment-instructions">
+                {enabledMethods.map(([methodId, method]) => (
+                  <details key={methodId}>
+                    <summary><span>{paymentMethodLabels[methodId]}</span><b dir="ltr">{method.recipient}</b></summary>
+                    <p>{method.instructions}</p>
+                  </details>
+                ))}
+              </div>
+              <div className="dashboard-billing__form-fields">
+                <label>مرجع التحويل
+                  <input name="transactionReference" required minLength="3" maxLength="100" autoComplete="off" placeholder="أدخل رقم العملية أو مرجع التحويل" />
+                </label>
+                <label>إيصال الدفع <span>اختياري · حتى 5 MB</span>
+                  <input name="receipt" type="file" accept="image/png,image/jpeg,image/webp,application/pdf" />
+                </label>
+              </div>
+              <p className="dashboard-privacy-note">إرسال الطلب أو الإيصال لا يفعّل الاشتراك تلقائيًا. سيُفعّل فقط بعد مراجعة المسؤول والموافقة عليه.</p>
+              <button type="submit" className="button button--primary" disabled={busy}>
+                {busy ? 'جارٍ إرسال الطلب…' : `إرسال طلب الاشتراك ${billingPeriod === 'annual' ? 'السنوي' : 'الشهري'} · ${selectedPrice}`}
+              </button>
+            </form>
+          ) : (
+            <div className="dashboard-billing__unavailable">
+              <span aria-hidden="true">i</span>
+              <p>{!subscriptionPlan?.configured
+                ? 'لم يضبط المسؤول سعر الاشتراك بعد.'
+                : 'لا توجد طريقة دفع متاحة حاليًا. يرجى العودة لاحقًا.'}</p>
+            </div>
+          )}
+
+          <section className="dashboard-billing__history">
+            <div className="dashboard-billing__section-heading">
+              <div><span>المعاملات</span><h4>طلبات الدفع</h4></div>
+              <span>{paymentHistory.length}</span>
+            </div>
+            {paymentHistory.length === 0
+              ? <ProgressNotice>لا توجد طلبات دفع مسجلة حتى الآن.</ProgressNotice>
+              : <div className="dashboard-attempt-list">
+                {paymentHistory.map((payment) => (
+                  <article className="dashboard-attempt dashboard-billing__record" key={payment.id}>
+                    <div>
+                      <h4>{paymentMethodLabels[payment.method]} · {payment.period === 'annual' ? 'اشتراك سنوي' : 'اشتراك شهري'} · {payment.transactionReference}</h4>
+                      <time dateTime={payment.createdAt}>{formatDate(payment.createdAt)}</time>
+                    </div>
+                    <div className="dashboard-billing__record-meta">
+                      <strong>{new Intl.NumberFormat('ar-EG', { style: 'currency', currency: payment.currency }).format(payment.amountMinor / 100)}</strong>
+                      <span className={`dashboard-billing__payment-status dashboard-billing__payment-status--${payment.status}`}>
+                        {paymentStatusLabels[payment.status] ?? payment.status}
+                      </span>
+                    </div>
+                    {payment.receiptUrl && <a href={payment.receiptUrl} target="_blank" rel="noreferrer">عرض الإيصال المرفق</a>}
+                    {payment.review?.decisionNote && <small>{payment.review.decisionNote}</small>}
+                  </article>
+                ))}
+              </div>}
+          </section>
+
+          <section className="dashboard-billing__history">
+            <div className="dashboard-billing__section-heading">
+              <div><span>المدة والخطة</span><h4>سجل الاشتراكات</h4></div>
+              <span>{subscriptionHistory.length}</span>
+            </div>
+            {subscriptionHistory.length === 0
+              ? <ProgressNotice>لا توجد اشتراكات سابقة. تبقى ملفات الأطفال وسجلاتهم محفوظة عند انتهاء الاشتراك.</ProgressNotice>
+              : <div className="dashboard-attempt-list">
+                {subscriptionHistory.map((item) => (
+                  <article className="dashboard-attempt dashboard-billing__record" key={item.id}>
+                    <div>
+                      <h4>{subscriptionStatusLabels[item.status] ?? 'اشتراك'} · {item.period === 'annual' ? 'سنوي' : 'شهري'} · {item.paymentMethod ? paymentMethodLabels[item.paymentMethod] : 'تفعيل إداري سابق'}</h4>
+                      <span>{formatDate(item.startsAt)} — {formatDate(item.expiresAt)}</span>
+                    </div>
+                    {item.amountMinor && (
+                      <p>{new Intl.NumberFormat('ar-EG', { style: 'currency', currency: item.currency }).format(item.amountMinor / 100)}
+                        {item.transactionReference ? ` · مرجع ${item.transactionReference}` : ''}
+                      </p>
+                    )}
+                  </article>
+                ))}
+              </div>}
+          </section>
+        </section>
+      );
+    }
+
+    if (section === 'notifications') {
+      return <NotificationCenter appointmentHref="/dashboard?section=appointments" />;
+    }
+
+    if (section === 'accountProfile') {
+      return (
+        <section className="dashboard-section">
+          <form className="auth-form dashboard-form" onSubmit={saveProfile}>
+            <p className="auth-description">حدّث الاسم الظاهر في حسابك. البريد الإلكتروني وكلمة المرور يُداران عبر مسارات الحساب الآمنة.</p>
+            <label>الاسم المعروض
+              <input required minLength={2} maxLength={80} value={profileName}
+                onChange={(event) => setProfileName(event.target.value)} />
+            </label>
+            <label>البريد الإلكتروني
+              <input value={user?.email ?? ''} readOnly dir="ltr" />
+            </label>
+            <button type="submit" className="button button--primary" disabled={busy}>
+              {busy ? 'جارٍ الحفظ…' : 'حفظ الملف الشخصي'}
+            </button>
+          </form>
+        </section>
+      );
+    }
+
+    return (
+      <section className="dashboard-section">
+        <h3>إعدادات الحساب</h3>
+        <div className="dashboard-account-setting">
+          <span>البريد الإلكتروني</span>
+          <strong dir="ltr">{user?.email ?? 'غير متاح'}</strong>
+        </div>
+        <p className="dashboard-privacy-note">إدارة كلمة المرور وتسجيل الخروج تتم عبر إعدادات الحساب الآمنة.</p>
+        <div className="dashboard-profile-actions">
+          <button type="button" className="button button--outline" onClick={onPasswordRecovery}>استعادة كلمة المرور</button>
+          <button type="button" className="button button--outline" onClick={onBack}>العودة إلى الحساب</button>
+          <button type="button" className="button button--outline" disabled={busy} onClick={onSignOut}>تسجيل الخروج</button>
+        </div>
+      </section>
+    );
+  };
+
+  return (
+    <div className="parent-dashboard">
+      <aside className={`parent-dashboard__sidebar${mobileMenuOpen ? ' is-mobile-menu-open' : ''}`}
+        aria-label="قائمة لوحة الأسرة">
+        <div className="parent-dashboard__sidebar-heading">
+          <span className="dashboard-avatar" aria-hidden="true">🐼</span>
+          <div>
+            <strong>مساحة الأسرة</strong>
+            <small>{user?.email}</small>
+          </div>
+          <button type="button" className="dashboard-sidebar__toggle"
+            aria-label={mobileMenuOpen ? 'إغلاق قائمة الأسرة' : 'فتح قائمة الأسرة'}
+            aria-expanded={mobileMenuOpen} aria-controls="parent-dashboard-navigation"
+            onClick={() => setMobileMenuOpen((open) => !open)}>
+            <span /><span /><span />
+          </button>
+        </div>
+        {children.length > 0 && (
+          <label className="dashboard-child-switcher">ملف الطفل
+            <select
+              value={selectedChildId}
+              onChange={(event) => {
+                setSelectedChildId(event.target.value);
+                setAttemptPage(1);
+                setGameFilter('');
+              }}
+            >
+              {children.map((child) => (
+                <option value={child.id} key={child.id}>
+                  {child.displayName}{child.status === 'archived' ? ' (متوقف)' : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <nav className="dashboard-nav" id="parent-dashboard-navigation" aria-label="أقسام لوحة الأسرة">
+          {sections.map((item) => (
+            <button
+              type="button"
+              className={section === item.id ? 'dashboard-nav__item is-active' : 'dashboard-nav__item'}
+              aria-current={section === item.id ? 'page' : undefined}
+              key={item.id}
+              onClick={() => {
+                selectSection(item.id);
+                setMobileMenuOpen(false);
+              }}
+            >
+              <span className="parent-dashboard__nav-icon" aria-hidden="true">{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+        </nav>
+        <p className="parent-dashboard__sidebar-note">حجز الأخصائي اختياري، ويمكنك استخدام الألعاب التعليمية دون موعد.</p>
+        <button type="button" className="button button--small button--outline parent-dashboard__back" onClick={onBack}>
+          {backLabel}
+        </button>
+      </aside>
+
+      <div className="parent-dashboard__main" id="parent-dashboard-content">
+        <header className="parent-dashboard__header">
+          <div>
+            <span className="dashboard-eyebrow">حرف · مساحة الأسرة</span>
+            <h2>{sectionTitles[section]}</h2>
+          </div>
+          <div className="parent-dashboard__header-actions">
+            {selectedChild && <span className="parent-dashboard__active-child">الملف الحالي: <strong>{selectedChild.displayName}</strong></span>}
+            <NotificationBell onOpenNotifications={() => selectSection('notifications')} />
+          </div>
+        </header>
+        {notice && <p className="auth-message" role="status">{notice}</p>}
+        {error && (
+          <div className="auth-error" role="alert">
+            <p>{error}</p>
+            {sessionExpired
+              ? <button type="button" className="auth-text-button" onClick={onReauthenticate}>تسجيل الدخول مجددًا</button>
+              : <button type="button" className="auth-text-button" onClick={loadChildren}>إعادة المحاولة</button>}
+          </div>
+        )}
+        {renderContent()}
+      </div>
+      {meetingAppointment && (
+        <AppointmentMeeting
+          appointment={meetingAppointment}
+          viewerRole="parent"
+          displayName={displayNameOrFallback(user?.parentProfile?.displayName, user?.email)}
+          onClose={() => {
+            setMeetingAppointment(null);
+            apiRequest('/api/v1/appointments')
+              .then(({ appointments: history }) => setAppointments(history))
+              .catch(reportError);
+          }}
+        />
+      )}
+    </div>
+  );
+}

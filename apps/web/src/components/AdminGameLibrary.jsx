@@ -1142,6 +1142,10 @@ function AdminGameLibrary({ user, onSignOut, onReauthenticate, initialView = 'ga
               </div>
               <div className="admin-library__actions">
                 <button type="submit" className="button button--outline" disabled={busy}>حفظ المسودة</button>
+                <button type="button" className="button button--outline" disabled={busy}
+                  onClick={() => window.open(`/games/${encodeURIComponent(selectedGame.gameId)}?preview=admin`, '_blank', 'noopener,noreferrer')}>
+                  معاينة المسودة
+                </button>
                 <button type="button" className="button button--primary" disabled={busy} onClick={() => void publishGame()}>
                   {selectedGame.status === 'published' ? 'حفظ ونشر إصدار جديد' : 'حفظ ونشر اللعبة'}
                 </button>
