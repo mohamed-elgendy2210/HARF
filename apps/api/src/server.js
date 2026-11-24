@@ -133,6 +133,7 @@ export async function createServerApp({ startExpiryWorker = true } = {}) {
     notificationService,
     logger,
     appOrigin: config.appOrigin,
+    googleClientId: config.googleClientId,
     specialistDocumentService
   });
   const platformSettingsService = new PlatformSettingsService({

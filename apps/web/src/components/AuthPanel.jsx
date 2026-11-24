@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { apiRequest, setCsrfToken } from '../lib/api.js';
 import BrandLogo from './BrandLogo.jsx';
@@ -6,6 +6,90 @@ import BrandLogo from './BrandLogo.jsx';
 const ParentDashboard = lazy(() => import('./ParentDashboard.jsx'));
 const AdminDashboard = lazy(() => import('./AdminDashboard.jsx'));
 const SpecialistDashboard = lazy(() => import('./SpecialistDashboard.jsx'));
+const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
+let googleScriptPromise;
+
+function loadGoogleIdentityScript() {
+  if (window.google?.accounts?.id) return Promise.resolve();
+  if (!googleScriptPromise) {
+    googleScriptPromise = new Promise((resolve, reject) => {
+      let script = document.querySelector('script[data-google-identity]');
+      const handleLoad = () => resolve();
+      const handleError = () => {
+        googleScriptPromise = null;
+        reject(new Error('تعذر تحميل تسجيل Google. تحقق من اتصالك بالإنترنت ثم حاول مرة أخرى.'));
+      };
+      if (!script) {
+        script = document.createElement('script');
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.async = true;
+        script.defer = true;
+        script.dataset.googleIdentity = 'true';
+      }
+      script.addEventListener('load', handleLoad, { once: true });
+      script.addEventListener('error', handleError, { once: true });
+      if (!script.isConnected) document.head.append(script);
+    });
+  }
+  return googleScriptPromise;
+}
+
+function GoogleSignInButton({ context, disabled, onCredential, onError }) {
+  const buttonRef = useRef(null);
+  const [ready, setReady] = useState(false);
+  const enabled = Boolean(googleClientId);
+
+  useEffect(() => {
+    if (!enabled) return undefined;
+    let active = true;
+    loadGoogleIdentityScript()
+      .then(() => {
+        if (!active || !buttonRef.current) return;
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: (response) => {
+            if (response.credential) void onCredential(response.credential);
+          },
+          ux_mode: 'popup',
+          auto_select: false,
+          context
+        });
+        window.google.accounts.id.renderButton(buttonRef.current, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          text: 'continue_with',
+          shape: 'rectangular',
+          logo_alignment: 'left',
+          locale: 'en',
+          width: Math.min(400, Math.max(220, buttonRef.current.clientWidth))
+        });
+        setReady(true);
+      })
+      .catch((error) => {
+        if (active) {
+          setReady(false);
+          onError(error.message);
+        }
+      });
+    return () => { active = false; };
+  }, [context, enabled, onCredential, onError]);
+
+  return enabled
+    ? <div className={`auth-google-button${disabled ? ' is-disabled' : ''}`} aria-busy={!ready}>
+        <div ref={buttonRef} />
+        {disabled && <span className="auth-google-button__overlay" aria-hidden="true" />}
+      </div>
+    : (
+      <div className="auth-google-unavailable">
+        <button type="button" className="auth-google-unavailable__button" disabled>
+          <span className="auth-google-mark" aria-hidden="true">G</span>
+          Continue with Google
+        </button>
+        <small>يتطلب تفعيل تسجيل Google من إعدادات المنصة.</small>
+      </div>
+    );
+}
 
 const roleLabels = {
   parent: 'ولي أمر',
@@ -35,6 +119,7 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
   const [resetToken, setResetToken] = useState('');
   const [documentUploadBusy, setDocumentUploadBusy] = useState(false);
   const queryProcessed = useRef(false);
+  const authDialogRef = useRef(null);
 
   useEffect(() => {
     if (queryProcessed.current) return;
@@ -76,11 +161,39 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
 
   useEffect(() => {
     if (!open) return undefined;
-    const closeOnEscape = (event) => {
-      if (event.key === 'Escape') setOpen(false);
+    const previousFocus = document.activeElement;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusFrame = window.requestAnimationFrame(() => {
+      authDialogRef.current?.querySelector('input, button, select, textarea, a[href]')?.focus();
+    });
+    const handleDialogKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = [...(authDialogRef.current?.querySelectorAll(
+        'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], iframe, [tabindex]:not([tabindex="-1"])'
+      ) ?? [])].filter((element) => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
-    window.addEventListener('keydown', closeOnEscape);
-    return () => window.removeEventListener('keydown', closeOnEscape);
+    window.addEventListener('keydown', handleDialogKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      window.removeEventListener('keydown', handleDialogKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+    };
   }, [open]);
 
   const startView = (nextView) => {
@@ -95,12 +208,41 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
     window.dispatchEvent(new PopStateEvent('popstate'));
   };
 
-  const handleSession = (result) => {
+  const handleSession = useCallback((result) => {
     if (result.user !== undefined) setUser(result.user);
     if (result.csrfToken) {
       setCsrfToken(result.csrfToken);
     }
-  };
+  }, []);
+
+  const handleGoogleCredential = useCallback(async (credential) => {
+    setError('');
+    setNotice('');
+    setBusy(true);
+    try {
+      const result = await apiRequest('/api/v1/auth/google', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credential })
+      });
+      handleSession(result);
+      setView('account');
+      setNotice(result.user.approvalStatus === 'approved'
+        ? 'تم تسجيل الدخول باستخدام Google.'
+        : 'تم إنشاء الحساب وتأكيد البريد عبر Google. سيظهر لك الحساب بعد اعتماد الإدارة.');
+    } catch (requestError) {
+      const message = requestError.code === 'GOOGLE_PARENT_ONLY'
+        ? 'تسجيل Google متاح لحسابات أولياء الأمور فقط. استخدم طريقة الدخول الحالية لهذا الحساب.'
+        : requestError.code === 'GOOGLE_IDENTITY_CONFLICT'
+          ? 'هذا البريد مرتبط بحساب آخر. سجّل الدخول بالبريد وكلمة المرور أولًا.'
+          : requestError.message;
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  }, [handleSession]);
+
+  const handleGoogleError = useCallback((message) => setError(message), []);
 
   const submitSpecialistDocuments = async (event) => {
     event.preventDefault();
@@ -238,10 +380,24 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
     }
   };
 
+  const googleAvailableHere = !standaloneAdmin && !standaloneSpecialist;
+  const renderGoogleOption = (context) => (
+    <div className="auth-provider">
+      <GoogleSignInButton
+        context={context}
+        disabled={busy}
+        onCredential={handleGoogleCredential}
+        onError={handleGoogleError}
+      />
+      <div className="auth-divider"><span>أو باستخدام البريد الإلكتروني</span></div>
+    </div>
+  );
+
   const renderForm = () => {
     if (view === 'register') {
       return (
         <>
+          {googleAvailableHere && registerRole === 'parent' && renderGoogleOption('signup')}
           <label>الاسم
             <input name="displayName" required minLength="2" maxLength="100" autoComplete="name" />
           </label>
@@ -251,11 +407,12 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
               <option value="specialist">أخصائي تخاطب</option>
             </select>
           </label>
+            {registerRole === 'specialist' && <p className="auth-description">تسجيل Google مخصص لحسابات أولياء الأمور؛ يلزم تسجيل الأخصائي بالبريد ورفع وثائق التحقق.</p>}
           <label>البريد الإلكتروني
-            <input name="email" type="email" required maxLength="254" autoComplete="email" dir="ltr" />
+              <input name="email" type="email" required maxLength="254" autoComplete="email" placeholder="name@example.com" dir="ltr" />
           </label>
           <label>كلمة المرور
-            <input name="password" type="password" required minLength="12" maxLength="128" autoComplete="new-password" dir="ltr" />
+              <input name="password" type="password" required minLength="12" maxLength="128" autoComplete="new-password" placeholder="١٢ حرفًا على الأقل" dir="ltr" />
           </label>
           {registerRole === 'specialist' && (
             <div className="specialist-document-fields">
@@ -273,6 +430,7 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
             </div>
           )}
           <button className="button button--primary auth-submit" disabled={busy}>إنشاء الحساب</button>
+          <p className="auth-form__switch">لديك حساب؟ <button type="button" className="auth-text-button" onClick={() => startView('login')}>تسجيل الدخول</button></p>
         </>
       );
     }
@@ -280,11 +438,12 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
     if (view === 'login') {
       return (
         <>
+          {googleAvailableHere && renderGoogleOption('signin')}
           <label>البريد الإلكتروني
-            <input name="email" type="email" required maxLength="254" autoComplete="email" dir="ltr" />
+            <input name="email" type="email" required maxLength="254" autoComplete="email" placeholder="name@example.com" dir="ltr" />
           </label>
           <label>كلمة المرور
-            <input name="password" type="password" required maxLength="128" autoComplete="current-password" dir="ltr" />
+            <input name="password" type="password" required maxLength="128" autoComplete="current-password" placeholder="أدخل كلمة المرور" dir="ltr" />
           </label>
           <button className="button button--primary auth-submit" disabled={busy}>دخول</button>
           <button type="button" className="auth-text-button" onClick={() => startView('forgot')}>نسيت كلمة المرور؟</button>
@@ -480,6 +639,8 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
       <button
         className="button button--small button--outline auth-trigger"
         type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
         onClick={() => startView(user ? 'account' : 'login')}
       >
         {user ? roleLabel(user.role) : 'دخول / حساب'}
@@ -489,11 +650,24 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
           <div className="auth-backdrop" style={modalThemeStyle} onMouseDown={(event) => {
             if (event.target === event.currentTarget) setOpen(false);
           }}>
-            <section className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+            <section ref={authDialogRef} className="auth-dialog" role="dialog" aria-modal="true" aria-labelledby="auth-title" aria-describedby="auth-dialog-description">
               <button className="auth-close" type="button" aria-label="إغلاق" onClick={() => setOpen(false)}>×</button>
+              <div className="auth-dialog__brand" aria-hidden="true">
+                <span>ح</span>
+                <small>مساحة آمنة للعائلة</small>
+              </div>
               <h2 id="auth-title">
                 {view === 'register' ? 'إنشاء حساب' : view === 'login' ? 'أهلًا بك في حرف' : view === 'profile' ? 'الملف المهني' : view === 'account' ? 'حسابك في حرف' : view === 'forgot' ? 'استعادة كلمة المرور' : 'كلمة مرور جديدة'}
               </h2>
+              <p className="auth-dialog__description" id="auth-dialog-description">
+                {view === 'register'
+                  ? 'أنشئ حسابك وابدأ متابعة رحلة طفلك التعليمية.'
+                  : view === 'login'
+                    ? 'سجّل دخولك بأمان لمتابعة حسابك ورحلة طفلك.'
+                    : view === 'forgot'
+                      ? 'سنساعدك على استعادة الوصول إلى حسابك.'
+                      : 'بياناتك محفوظة بأمان في منصة حرف.'}
+              </p>
               {notice && <p className="auth-message" role="status">{notice}</p>}
               {error && <p className="auth-error" role="alert">{error}</p>}
 

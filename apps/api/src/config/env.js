@@ -27,6 +27,7 @@ const envSchema = z.object({
   SMTP_USER: z.string().optional(),
   SMTP_PASSWORD: z.string().optional(),
   SMTP_FROM: z.string().trim().optional(),
+  GOOGLE_CLIENT_ID: z.string().trim().max(256).default(''),
   JITSI_DOMAIN: z.string().trim().min(1).max(253).default('meet.jit.si'),
   JITSI_PARENT_EARLY_JOIN_MINUTES: z.coerce.number().int().min(0).max(60).default(10),
   JITSI_SPECIALIST_EARLY_JOIN_MINUTES: z.coerce.number().int().min(0).max(60).default(15),
@@ -155,5 +156,6 @@ export const config = Object.freeze({
         password: values.SMTP_PASSWORD,
         from: values.SMTP_FROM
       })
-    : null
+    : null,
+  googleClientId: values.GOOGLE_CLIENT_ID
 });

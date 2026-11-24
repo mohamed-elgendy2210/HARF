@@ -20,6 +20,10 @@ export const loginSchema = z.object({
   password: z.string().min(1).max(128)
 }).strict();
 
+export const googleCredentialSchema = z.object({
+  credential: z.string().min(100).max(8192)
+}).strict();
+
 export const emailSchema = z.object({ email }).strict();
 
 export const tokenSchema = z.object({

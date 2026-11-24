@@ -13,6 +13,7 @@ import {
 import { validate } from '../middleware/validate.js';
 import {
   emailSchema,
+  googleCredentialSchema,
   loginSchema,
   administratorProfileSchema,
   parentProfileSchema,
@@ -117,6 +118,15 @@ export function createAuthRouter({ authService, config, authenticationMiddleware
   router.post('/login', loginLimiter, validate(loginSchema), async (request, response) => {
     const result = await authService.login({
       ...request.body,
+      existingSessionToken: readCookie(request, sessionName)
+    });
+    setSessionCookie(response, result.session, config);
+    response.json({ user: result.user, csrfToken: result.session.csrfToken });
+  });
+
+  router.post('/google', loginLimiter, validate(googleCredentialSchema), async (request, response) => {
+    const result = await authService.loginWithGoogle({
+      credential: request.body.credential,
       existingSessionToken: readCookie(request, sessionName)
     });
     setSessionCookie(response, result.session, config);

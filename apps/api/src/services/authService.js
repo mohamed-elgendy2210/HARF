@@ -3,6 +3,7 @@ import { AppError } from '../middleware/errors.js';
 import { isReadableName } from '../lib/nameValidation.js';
 import { safeError } from '../lib/logger.js';
 import { hashPassword, verifyPassword } from './passwords.js';
+import { verifyGoogleIdToken } from './googleIdentity.js';
 import { NOTIFICATION_TYPES } from './notificationTypes.js';
 
 const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
@@ -94,12 +95,24 @@ export function serializeAccount(user) {
 }
 
 export class AuthService {
-  constructor({ repository, emailService, notificationService, logger, appOrigin, specialistDocumentService, now = () => new Date() }) {
+  constructor({
+    repository,
+    emailService,
+    notificationService,
+    logger,
+    appOrigin,
+    googleClientId = '',
+    googleTokenVerifier = verifyGoogleIdToken,
+    specialistDocumentService,
+    now = () => new Date()
+  }) {
     this.repository = repository;
     this.emailService = emailService;
     this.notificationService = notificationService;
     this.logger = logger;
     this.appOrigin = appOrigin;
+    this.googleClientId = googleClientId;
+    this.googleTokenVerifier = googleTokenVerifier;
     this.specialistDocumentService = specialistDocumentService;
     this.now = now;
   }
@@ -242,6 +255,120 @@ export class AuthService {
     await this.recordAudit('account.login_succeeded', {
       actorUserId: user._id ?? user.id,
       targetUserId: user._id ?? user.id
+    });
+    if (existingSessionToken) await this.repository.deleteSession(hashOpaqueToken(existingSessionToken));
+    const session = await this.createSession(user);
+    return { user: serializeAccount(user), session };
+  }
+
+  async linkGoogleIdentity(userId, googleSubject, emailVerifiedAt) {
+    try {
+      return await this.repository.linkGoogleIdentity(userId, googleSubject, emailVerifiedAt);
+    } catch (error) {
+      if (error?.code === 11000) {
+        throw new AppError(409, 'GOOGLE_IDENTITY_CONFLICT', 'This Google account is already linked to another account.');
+      }
+      throw error;
+    }
+  }
+
+  async loginWithGoogle({ credential, existingSessionToken }) {
+    if (!this.googleClientId) {
+      throw new AppError(503, 'GOOGLE_AUTH_UNAVAILABLE', 'Google sign-in is not configured.');
+    }
+
+    let identity;
+    try {
+      identity = await this.googleTokenVerifier(credential, this.googleClientId);
+    } catch {
+      throw new AppError(401, 'INVALID_GOOGLE_CREDENTIAL', 'Google could not verify this sign-in. Please try again.');
+    }
+    if (identity.email_verified !== true || typeof identity.sub !== 'string' || !identity.sub
+      || typeof identity.email !== 'string' || !identity.email.trim()) {
+      throw new AppError(401, 'INVALID_GOOGLE_IDENTITY', 'Google must provide a verified email address.');
+    }
+
+    const email = normalizeEmail(identity.email);
+    const now = this.now();
+    let user = await this.repository.findUserByGoogleSubject(identity.sub);
+    let isNewAccount = false;
+
+    if (!user) {
+      const emailAccount = await this.repository.findUserByEmail(email);
+      if (emailAccount) {
+        if (emailAccount.role !== 'parent') {
+          throw new AppError(403, 'GOOGLE_PARENT_ONLY', 'Google sign-in is available for parent accounts only. Use your existing sign-in method for this account.');
+        }
+        if (emailAccount.accountStatus !== 'active') {
+          throw new AppError(403, 'ACCOUNT_UNAVAILABLE', 'This account is currently unavailable.');
+        }
+        user = await this.linkGoogleIdentity(emailAccount._id ?? emailAccount.id, identity.sub, now);
+        if (!user) {
+          throw new AppError(409, 'GOOGLE_IDENTITY_CONFLICT', 'This Google account is already linked to another account.');
+        }
+      } else {
+        const displayName = typeof identity.name === 'string' && isReadableName(identity.name.trim())
+          ? identity.name.trim().slice(0, 80)
+          : 'ولي أمر';
+        try {
+          user = await this.repository.createUser({
+            email,
+            passwordHash: await hashPassword(randomBytes(32).toString('base64url')),
+            googleSubject: identity.sub,
+            role: 'parent',
+            emailVerifiedAt: now,
+            approvalStatus: PENDING_APPROVAL,
+            accountStatus: 'active',
+            parentProfile: { displayName }
+          });
+          isNewAccount = true;
+        } catch (error) {
+          if (error?.code !== 11000) throw error;
+          user = await this.repository.findUserByGoogleSubject(identity.sub);
+          if (!user) {
+            const concurrentEmailAccount = await this.repository.findUserByEmail(email);
+            if (concurrentEmailAccount?.role === 'parent') {
+              user = await this.linkGoogleIdentity(
+                concurrentEmailAccount._id ?? concurrentEmailAccount.id,
+                identity.sub,
+                now
+              );
+            }
+          }
+          if (!user) {
+            throw new AppError(409, 'GOOGLE_IDENTITY_CONFLICT', 'An account with this email already exists. Sign in with your password first.');
+          }
+        }
+      }
+    }
+
+    if (user.role !== 'parent') {
+      throw new AppError(403, 'GOOGLE_PARENT_ONLY', 'Google sign-in is available for parent accounts only. Use your existing sign-in method for this account.');
+    }
+    if (user.accountStatus !== 'active') {
+      throw new AppError(403, 'ACCOUNT_UNAVAILABLE', 'This account is currently unavailable.');
+    }
+
+    if (isNewAccount) {
+      await this.recordAudit('account.registered', {
+        targetUserId: user._id ?? user.id,
+        metadata: { role: 'parent', authProvider: 'google' }
+      });
+      await this.notifyAdministrators({
+        type: NOTIFICATION_TYPES.ACCOUNT_PENDING_REVIEW,
+        title: 'حساب ولي أمر جديد بانتظار الاعتماد',
+        message: 'يوجد طلب حساب جديد بانتظار مراجعة الإدارة.',
+        resourceType: 'account',
+        resourceId: user._id ?? user.id,
+        dedupeKey: `pending-account:${user._id ?? user.id}`,
+        actionUrl: '/admin?view=accounts'
+      });
+    }
+
+    await this.recordAudit('account.login_succeeded', {
+      actorUserId: user._id ?? user.id,
+      targetUserId: user._id ?? user.id,
+      metadata: { authProvider: 'google' }
     });
     if (existingSessionToken) await this.repository.deleteSession(hashOpaqueToken(existingSessionToken));
     const session = await this.createSession(user);

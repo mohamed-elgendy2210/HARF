@@ -40,6 +40,22 @@ export function createAuthRepository() {
       const query = User.findOne({ email }).populate('adminRoleId');
       return includePassword ? query.select('+passwordHash') : query;
     },
+    findUserByGoogleSubject(googleSubject) {
+      return User.findOne({ googleSubject }).select('+googleSubject').populate('adminRoleId');
+    },
+    linkGoogleIdentity(userId, googleSubject, emailVerifiedAt) {
+      return User.findOneAndUpdate({
+        _id: userId,
+        role: 'parent',
+        $or: [
+          { googleSubject: { $exists: false } },
+          { googleSubject: null },
+          { googleSubject }
+        ]
+      }, {
+        $set: { googleSubject, emailVerifiedAt }
+      }, { new: true, runValidators: true }).populate('adminRoleId');
+    },
     findUserById(id) {
       return User.findById(id).populate('adminRoleId');
     },

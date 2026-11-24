@@ -65,6 +65,8 @@ const config = {
 const logger = createLogger({ level: 'silent' });
 const verificationEmails = [];
 const resetEmails = [];
+let googleIdentityResponse = null;
+const validGoogleCredential = 'v'.repeat(100);
 const emailService = {
   isConfigured: () => true,
   async sendVerification(message) { verificationEmails.push(message); },
@@ -741,12 +743,28 @@ function createMemoryRepository() {
         error.code = 11000;
         throw error;
       }
+      if (data.googleSubject && [...users.values()].some((user) => user.googleSubject === data.googleSubject)) {
+        const error = new Error('duplicate Google identity');
+        error.code = 11000;
+        throw error;
+      }
       const user = { ...data, _id: idFor(), createdAt: new Date() };
       users.set(user._id, user);
       return user;
     },
     async findUserByEmail(email) {
       return [...users.values()].find((user) => user.email === email) ?? null;
+    },
+    async findUserByGoogleSubject(googleSubject) {
+      return [...users.values()].find((user) => user.googleSubject === googleSubject) ?? null;
+    },
+    async linkGoogleIdentity(userId, googleSubject, emailVerifiedAt) {
+      if ([...users.values()].some((user) => user._id !== String(userId) && user.googleSubject === googleSubject)) return null;
+      const user = users.get(String(userId));
+      if (!user || user.role !== 'parent' || (user.googleSubject && user.googleSubject !== googleSubject)) return null;
+      user.googleSubject = googleSubject;
+      user.emailVerifiedAt = emailVerifiedAt;
+      return user;
     },
     async listParentAccounts() {
       return [...users.values()].filter((user) => user.role === 'parent');
@@ -1387,6 +1405,12 @@ before(async () => {
     notificationService,
     logger,
     appOrigin: config.appOrigin,
+    googleClientId: 'test-google-client-id',
+    googleTokenVerifier: async (credential, audience) => {
+      assert.equal(audience, 'test-google-client-id');
+      if (credential !== validGoogleCredential || !googleIdentityResponse) throw new Error('invalid credential');
+      return googleIdentityResponse;
+    },
     specialistDocumentService
   });
   childService = new ChildService({ repository });
@@ -1573,6 +1597,8 @@ test('Mongoose models declare unique email accounts and explicit TTL indexes', (
   assert.equal(User.schema.path('adminRoleId').options.ref, 'Role');
   assert.ok(Role.schema.indexes().some(([fields, options]) => fields.key === 1 && options.unique));
   assert.ok(User.schema.indexes().some(([fields, options]) => fields.email === 1 && options.unique));
+  assert.ok(User.schema.indexes().some(([fields, options]) => fields.googleSubject === 1
+    && options.unique && options.partialFilterExpression?.googleSubject?.$type === 'string'));
   assert.equal(User.schema.indexes().some(([fields, options]) => fields.role === 1 && options.unique), false);
   assert.ok(Session.schema.indexes().some(([fields, options]) => fields.expiresAt === 1 && options.expireAfterSeconds === 0));
   assert.ok(AuthToken.schema.indexes().some(([fields, options]) => fields.expiresAt === 1 && options.expireAfterSeconds === 0));
@@ -2218,6 +2244,91 @@ test('registration rejects privilege fields and only creates pending parent/spec
   });
   assert.equal(duplicate.user, null);
   assert.equal(duplicate.session, null);
+});
+
+test('Google sign-in creates verified parent accounts and reuses the linked identity', async () => {
+  googleIdentityResponse = {
+    sub: 'google-subject-parent-1',
+    email: 'google-parent@harf.test',
+    email_verified: true,
+    name: 'Google Parent'
+  };
+
+  const firstResponse = await request('/auth/google', {
+    method: 'POST',
+    body: { credential: validGoogleCredential }
+  });
+  assert.equal(firstResponse.status, 200);
+  const firstResult = await firstResponse.json();
+  assert.equal(firstResult.user.role, 'parent');
+  assert.equal(firstResult.user.emailVerified, true);
+  assert.equal(firstResult.user.approvalStatus, 'pending');
+  assert.equal(firstResult.user.email, 'google-parent@harf.test');
+  assert.equal(Object.hasOwn(firstResult.user, 'googleSubject'), false);
+
+  const secondResponse = await request('/auth/google', {
+    method: 'POST',
+    body: { credential: validGoogleCredential }
+  });
+  assert.equal(secondResponse.status, 200);
+  const secondResult = await secondResponse.json();
+  assert.equal(secondResult.user.id, firstResult.user.id);
+});
+
+test('Google sign-in securely links an existing parent by its verified email', async () => {
+  const existingParent = await repository.createUser({
+    email: 'existing-google-parent@harf.test',
+    passwordHash: await hashPassword('existing parent account password'),
+    role: 'parent',
+    emailVerifiedAt: null,
+    approvalStatus: 'approved',
+    accountStatus: 'active',
+    parentProfile: { displayName: 'Existing Parent' }
+  });
+  googleIdentityResponse = {
+    sub: 'google-subject-existing-parent',
+    email: existingParent.email,
+    email_verified: true,
+    name: 'Existing Parent'
+  };
+
+  const result = await authService.loginWithGoogle({ credential: validGoogleCredential });
+  assert.equal(result.user.id, String(existingParent._id));
+  assert.equal(result.user.emailVerified, true);
+  assert.equal((await repository.findUserByGoogleSubject(googleIdentityResponse.sub))._id, existingParent._id);
+});
+
+test('Google sign-in rejects unverified identities and specialist accounts', async () => {
+  googleIdentityResponse = {
+    sub: 'google-subject-unverified',
+    email: 'unverified@harf.test',
+    email_verified: false,
+    name: 'Unverified User'
+  };
+  await assert.rejects(
+    authService.loginWithGoogle({ credential: validGoogleCredential }),
+    (error) => error.statusCode === 401
+  );
+
+  await repository.createUser({
+    email: 'specialist-google@harf.test',
+    passwordHash: await hashPassword('approved specialist account password'),
+    role: 'specialist',
+    emailVerifiedAt: new Date(),
+    approvalStatus: 'approved',
+    accountStatus: 'active',
+    professionalProfile: { displayName: 'Specialist', publicListing: false }
+  });
+  googleIdentityResponse = {
+    sub: 'google-subject-specialist',
+    email: 'specialist-google@harf.test',
+    email_verified: true,
+    name: 'Specialist'
+  };
+  await assert.rejects(
+    authService.loginWithGoogle({ credential: validGoogleCredential }),
+    (error) => error.statusCode === 403 && error.code === 'GOOGLE_PARENT_ONLY'
+  );
 });
 
 test('specialist profile completeness rejects names corrupted to question marks', () => {

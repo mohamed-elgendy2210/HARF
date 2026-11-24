@@ -28,6 +28,7 @@ const professionalProfileSchema = new mongoose.Schema({
 const userSchema = new mongoose.Schema({
   email: { type: String, required: true, lowercase: true, trim: true, maxlength: 254 },
   passwordHash: { type: String, required: true, select: false },
+  googleSubject: { type: String, trim: true, select: false },
   role: { type: String, enum: ['parent', 'specialist', 'admin'], required: true, immutable: true },
   adminRoleId: { type: mongoose.Schema.Types.ObjectId, ref: 'Role', default: null },
   emailVerifiedAt: { type: Date, default: null },
@@ -47,6 +48,10 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.index({ email: 1 }, { unique: true, name: 'users_email_unique' });
+userSchema.index(
+  { googleSubject: 1 },
+  { unique: true, partialFilterExpression: { googleSubject: { $type: 'string' } }, name: 'users_google_subject_unique' }
+);
 userSchema.index({
   role: 1,
   approvalStatus: 1,
