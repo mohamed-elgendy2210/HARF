@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiRequest } from '../lib/api.js';
 import { displayNameOrFallback } from '../lib/displayName.js';
+import { usePolling } from '../lib/usePolling.js';
 import NotificationCenter from './NotificationCenter.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import AppointmentMeeting, { AppointmentJoinButton } from './appointments/AppointmentMeeting.jsx';
@@ -147,6 +148,26 @@ export default function SpecialistDashboard({ user, onSignOut, onReauthenticate,
   useEffect(() => {
     loadData();
   }, []);
+
+  const refreshRemoteSpecialistData = useCallback(async () => {
+    try {
+      const { appointments: history } = await apiRequest('/api/v1/appointments');
+      setAppointments(history);
+      if (section === 'learning' && selectedLearningChildId) {
+        const journey = await apiRequest(
+          `/api/v1/specialist/children/${encodeURIComponent(selectedLearningChildId)}/learning-journey`
+        );
+        setSpecialistJourney(journey);
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }, [section, selectedLearningChildId]);
+
+  usePolling(refreshRemoteSpecialistData, {
+    enabled: section === 'appointments' || section === 'learning',
+    listenForRemoteChanges: true
+  });
 
   useEffect(() => {
     if (section !== 'learning' || !selectedLearningChildId) {

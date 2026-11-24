@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiRequest } from '../lib/api.js';
+import { usePolling } from '../lib/usePolling.js';
 import { loadJitsiApi } from './appointments/AppointmentMeeting.jsx';
 
 const bookingLabels = {
@@ -79,6 +80,8 @@ function useQueryState(initial) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [reload, setReload] = useState(0);
+  const refreshSessions = () => setReload((value) => value + 1);
+  usePolling(refreshSessions, { listenForRemoteChanges: true });
   useEffect(() => {
     let active = true;
     if (filters.from && filters.to && filters.from > filters.to) {

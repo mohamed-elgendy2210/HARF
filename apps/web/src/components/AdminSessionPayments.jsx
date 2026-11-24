@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest, getApiUrl } from '../lib/api.js';
+import { usePolling } from '../lib/usePolling.js';
 
 const statusLabels = {
   awaiting_payment: 'في انتظار الدفع',
@@ -69,6 +70,24 @@ export default function AdminSessionPayments({ onOpenNotifications }) {
   }, [from, method, page, search, status, to]);
 
   useEffect(() => { void loadData(); }, [loadData]);
+
+  const refreshPayments = useCallback(async () => {
+    try {
+      const query = new URLSearchParams({ page: String(page), limit: '20', status, method, search });
+      if (from) query.set('from', new Date(`${from}T00:00:00`).toISOString());
+      if (to) query.set('to', new Date(`${to}T23:59:59.999`).toISOString());
+      const paymentResult = await apiRequest(`/api/v1/admin/session-payments?${query}`);
+      setPayments(paymentResult.payments);
+      setStats(paymentResult.stats);
+      setTotal(paymentResult.total);
+      setPages(Math.max(1, paymentResult.pages));
+      setError('');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }, [from, method, page, search, status, to]);
+
+  usePolling(refreshPayments, { listenForRemoteChanges: true });
 
   const saveSettings = async (event) => {
     event.preventDefault();

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import brandAsset from '../../../../Branding/Colors with logo.png';
 import { apiRequest, getApiUrl } from '../lib/api.js';
+import { usePolling } from '../lib/usePolling.js';
 
 const emptyPath = {
   key: '',
@@ -145,6 +146,21 @@ export default function AdminLearningPaths({ logoUrl }) {
   useEffect(() => {
     load();
   }, []);
+
+  const refreshRegistrationQueues = async () => {
+    try {
+      const [assignmentData, reviewData] = await Promise.all([
+        apiRequest('/api/v1/admin/learning-assignments'),
+        apiRequest('/api/v1/admin/learning-registration-reviews')
+      ]);
+      setAssignments(assignmentData.assignments);
+      setRegistrationReviews(reviewData.reviews);
+      setError('');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  };
+  usePolling(refreshRegistrationQueues, { listenForRemoteChanges: true });
 
   const updatePath = (field, value) => {
     setEditingPath((current) => ({ ...current, [field]: value }));

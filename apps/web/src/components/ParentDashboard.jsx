@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiRequest, getApiUrl } from '../lib/api.js';
 import { displayNameOrFallback } from '../lib/displayName.js';
+import { usePolling } from '../lib/usePolling.js';
 import NotificationCenter from './NotificationCenter.jsx';
 import NotificationBell from './NotificationBell.jsx';
 import ParentTestimonials from './ParentTestimonials.jsx';
@@ -316,6 +317,88 @@ export default function ParentDashboard({
       reportError(requestError);
     }
   };
+
+  const refreshRemoteParentData = useCallback(async () => {
+    try {
+      if (['overview', 'children', 'profile'].includes(section)) {
+        const [childrenResult, pendingResult, allowanceResult] = await Promise.all([
+          apiRequest('/api/v1/children'),
+          apiRequest('/api/v1/children/registrations/pending'),
+          apiRequest('/api/v1/children/allowance')
+        ]);
+        setChildren(childrenResult.children);
+        setPendingRegistrations(pendingResult.registrations);
+        setChildAllowance(allowanceResult.allowance);
+      }
+
+      if (section === 'specialists') {
+        const { specialists: directory } = await apiRequest('/api/v1/directory/specialists');
+        setSpecialists(directory);
+        setSelectedSpecialistId((current) =>
+          directory.some((specialist) => specialist.id === current) ? current : ''
+        );
+        if (selectedSpecialistId) {
+          const query = new URLSearchParams({ from: new Date().toISOString(), days: '14' });
+          const { availability } = await apiRequest(
+            `/api/v1/directory/specialists/${selectedSpecialistId}/availability?${query}`
+          );
+          setSpecialistAvailability(availability);
+        }
+      }
+
+      if (section === 'appointments' || section === 'reports') {
+        const { appointments: history } = await apiRequest('/api/v1/appointments');
+        setAppointments(history);
+      }
+
+      if (section === 'payments') {
+        const [billing, { plan }] = await Promise.all([
+          apiRequest('/api/v1/auth/subscription'),
+          apiRequest('/api/v1/payments/plan')
+        ]);
+        setSubscription(billing.subscription);
+        setSubscriptionHistory(billing.history);
+        setPaymentHistory(billing.payments);
+        setSubscriptionPlan(plan);
+      }
+
+      if (['progress', 'activity'].includes(section) && selectedChildId) {
+        const query = new URLSearchParams({ page: String(attemptPage), limit: '10' });
+        if (section === 'activity' && gameFilter) query.set('gameId', gameFilter);
+        const history = await apiRequest(`/api/v1/children/${selectedChildId}/game-attempts?${query}`);
+        setAttempts(history.attempts);
+        setAttemptTotal(history.total);
+        setHasMoreAttempts(history.hasMore);
+
+        if (section === 'progress') {
+          const analyticsQuery = new URLSearchParams({ period: progressPeriod });
+          if (performanceGameId) analyticsQuery.set('gameId', performanceGameId);
+          const [progressResult, journey, rewards, analyticsResult] = await Promise.all([
+            apiRequest(`/api/v1/children/${selectedChildId}/learning-progress`),
+            apiRequest(`/api/v1/children/${selectedChildId}/learning-journey`),
+            apiRequest(`/api/v1/children/${selectedChildId}/rewards`),
+            apiRequest(`/api/v1/children/${selectedChildId}/progress-analytics?${analyticsQuery}`)
+          ]);
+          setLearningProgress(progressResult.progress);
+          setLearningJourney(journey);
+          setRewardSummary(rewards);
+          setLearningJourneyError('');
+          setProgressAnalytics(analyticsResult.analytics);
+          setProgressAnalyticsError('');
+        }
+      }
+    } catch (requestError) {
+      reportError(requestError);
+    }
+  }, [section, selectedChildId, attemptPage, gameFilter, progressPeriod, performanceGameId]);
+
+  usePolling(refreshRemoteParentData, {
+    enabled: [
+      'overview', 'children', 'profile', 'specialists', 'appointments', 'reports',
+      'payments', 'progress', 'activity'
+    ].includes(section),
+    listenForRemoteChanges: true
+  });
 
   useEffect(() => {
     loadChildren();

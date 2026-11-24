@@ -1,6 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { apiRequest, getApiUrl } from '../lib/api.js';
 import { displayNameOrFallback } from '../lib/displayName.js';
+import { usePolling } from '../lib/usePolling.js';
 import AdminReports from './AdminReports.jsx';
 import AdminLearningPaths from './AdminLearningPaths.jsx';
 import NotificationCenter from './NotificationCenter.jsx';
@@ -222,6 +223,34 @@ export default function AdminDashboard({ user, onSignOut, onReauthenticate, onPr
       setLoading(false);
     }
   };
+
+  const refreshRemoteAdminData = useCallback(async () => {
+    try {
+      if (['overview', 'accounts'].includes(view) && hasPermission('users.view')) {
+        const { accounts: updatedAccounts } = await apiRequest('/api/v1/admin/accounts');
+        setAccounts(updatedAccounts);
+      }
+      if (['overview', 'subscriptions'].includes(view) && hasPermission('subscriptions.manage')) {
+        const [{ payments }, { parents }] = await Promise.all([
+          apiRequest('/api/v1/admin/payments'),
+          apiRequest('/api/v1/admin/subscription/child-usage')
+        ]);
+        setPaymentRequests(payments);
+        setParentChildUsage(parents);
+      }
+      if (view === 'administrators' && hasPermission('users.view')) {
+        const { administrators: updatedAdministrators } = await apiRequest('/api/v1/admin/administrators');
+        setAdministrators(updatedAdministrators);
+      }
+    } catch (requestError) {
+      reportError(requestError);
+    }
+  }, [permissions, view]);
+
+  usePolling(refreshRemoteAdminData, {
+    enabled: ['overview', 'accounts', 'subscriptions', 'administrators'].includes(view),
+    listenForRemoteChanges: true
+  });
 
   useEffect(() => {
     if (hasPermission('users.view')) loadAccounts();

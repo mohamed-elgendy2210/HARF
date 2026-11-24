@@ -1,7 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import BrandLogo from './components/BrandLogo.jsx';
 import AuthPanel from './components/AuthPanel.jsx';
 import { apiRequest, getApiUrl } from './lib/api.js';
+import { usePolling } from './lib/usePolling.js';
 import SpecialistCard from './components/SpecialistCard.jsx';
 
 const GamesPage = lazy(() => import('./components/games/GamesPage.jsx'));
@@ -627,6 +628,7 @@ export default function App() {
   const [platformSettings, setPlatformSettings] = useState(defaultPlatformSettings);
   const [platformSettingsError, setPlatformSettingsError] = useState('');
   const [platformSettingsLoaded, setPlatformSettingsLoaded] = useState(false);
+  const hasLoadedPlatformSettings = useRef(false);
 
   useEffect(() => {
     const updateRoute = () => setPortalRoute(window.location.pathname);
@@ -634,26 +636,24 @@ export default function App() {
     return () => window.removeEventListener('popstate', updateRoute);
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    apiRequest('/api/v1/platform/settings')
-      .then(({ settings }) => {
-        if (active) {
-          setPlatformSettings(settings);
-          setPlatformSettingsError('');
-        }
-      })
-      .catch((requestError) => {
-        if (active) {
-          setPlatformSettings(defaultPlatformSettings);
-          setPlatformSettingsError(requestError.message || 'تعذر تحميل إعدادات هوية المنصة.');
-        }
-      })
-      .finally(() => {
-        if (active) setPlatformSettingsLoaded(true);
-      });
-    return () => { active = false; };
+  const loadPlatformSettings = useCallback(async () => {
+    try {
+      const { settings } = await apiRequest('/api/v1/platform/settings');
+      setPlatformSettings(settings);
+      setPlatformSettingsError('');
+    } catch (requestError) {
+      if (!hasLoadedPlatformSettings.current) setPlatformSettings(defaultPlatformSettings);
+      setPlatformSettingsError(requestError.message || 'تعذر تحميل إعدادات هوية المنصة.');
+    } finally {
+      hasLoadedPlatformSettings.current = true;
+      setPlatformSettingsLoaded(true);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadPlatformSettings();
+  }, [loadPlatformSettings]);
+  usePolling(loadPlatformSettings, { intervalMs: 15000 });
 
   useEffect(() => {
     if (portalRoute !== '/') {

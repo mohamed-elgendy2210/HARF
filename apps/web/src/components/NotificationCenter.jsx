@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.js';
+import { usePolling } from '../lib/usePolling.js';
 
 export default function NotificationCenter({ appointmentHref = '' }) {
   const [notifications, setNotifications] = useState([]);
@@ -29,6 +30,7 @@ export default function NotificationCenter({ appointmentHref = '' }) {
   useEffect(() => {
     loadNotifications();
   }, [loadNotifications]);
+  usePolling(loadNotifications, { listenForRemoteChanges: true });
 
   const markRead = async (id) => {
     setBusy(true);

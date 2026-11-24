@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { apiRequest, getApiUrl } from '../lib/api.js';
+import { usePolling } from '../lib/usePolling.js';
 
 const numberFormat = new Intl.NumberFormat('ar-EG');
 const currencyFormat = new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP' });
@@ -123,6 +124,17 @@ export default function AdminReports() {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const refreshReport = useCallback(async () => {
+    if (!report) return;
+    try {
+      const query = queryForReportFilters(report.filters);
+      setReport(await apiRequest(`/api/v1/admin/reports${query ? `?${query}` : ''}`));
+      setError('');
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }, [report]);
+  usePolling(refreshReport, { enabled: Boolean(report), listenForRemoteChanges: true });
 
   const loadReport = async (event) => {
     event.preventDefault();

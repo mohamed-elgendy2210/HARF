@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../lib/api.js';
+import { usePolling } from '../lib/usePolling.js';
 
 const statusLabels = {
   pending: 'بانتظار المراجعة',
@@ -34,6 +35,7 @@ export default function AdminTestimonials() {
   useEffect(() => {
     loadTestimonials();
   }, [loadTestimonials]);
+  usePolling(loadTestimonials, { listenForRemoteChanges: true });
 
   const review = async (testimonial, decision) => {
     setBusyId(testimonial.id);

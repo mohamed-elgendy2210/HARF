@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiRequest } from '../lib/api.js';
+import { usePolling } from '../lib/usePolling.js';
 
 function notificationTime(value) {
   const date = new Date(value);
@@ -14,6 +15,7 @@ export default function NotificationBell({ onOpenNotifications }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState('');
+  const latestNotificationId = useRef(null);
 
   const refresh = useCallback(async (includeRecent = false) => {
     try {
@@ -31,16 +33,35 @@ export default function NotificationBell({ onOpenNotifications }) {
     }
   }, []);
 
+  const pollNotifications = useCallback(async () => {
+    try {
+      const [countResult, latestResult] = await Promise.all([
+        apiRequest('/api/v1/notifications/unread-count'),
+        apiRequest('/api/v1/notifications?limit=1')
+      ]);
+      setUnreadCount(countResult.unreadCount);
+      setError('');
+      const latestId = latestResult.notifications[0]?.id ?? null;
+      const previousId = latestNotificationId.current;
+      latestNotificationId.current = latestId;
+      if (previousId && latestId && previousId !== latestId) {
+        window.dispatchEvent(new Event('harf:remote-change'));
+        window.dispatchEvent(new Event('harf:notifications-changed'));
+      }
+    } catch (requestError) {
+      setError(requestError.message);
+    }
+  }, []);
+
   useEffect(() => {
-    void refresh();
+    void pollNotifications();
     const handleNotificationChange = () => void refresh(open);
     window.addEventListener('harf:notifications-changed', handleNotificationChange);
-    const timer = window.setInterval(() => void refresh(), 60_000);
     return () => {
-      window.clearInterval(timer);
       window.removeEventListener('harf:notifications-changed', handleNotificationChange);
     };
-  }, [open, refresh]);
+  }, [open, pollNotifications, refresh]);
+  usePolling(pollNotifications, { intervalMs: 5000 });
 
   const togglePanel = () => {
     const nextOpen = !open;
