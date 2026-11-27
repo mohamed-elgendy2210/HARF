@@ -11,6 +11,7 @@ import { z } from 'zod';
 const config = {
   trustProxy: false,
   isProduction: false,
+  googleClientId: 'test-google-client-id',
   clientOrigins: ['http://localhost:5173']
 };
 const logger = createLogger({ level: 'silent' });
@@ -33,6 +34,13 @@ test('liveness responds without exposing configuration', async () => {
   const response = await fetch(`${baseUrl}/api/v1/health/live`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: 'ok', service: 'harf-api' });
+});
+
+test('Google client configuration is public and does not require MongoDB', async () => {
+  const response = await fetch(`${baseUrl}/api/v1/auth/google/config`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  assert.deepEqual(await response.json(), { clientId: config.googleClientId });
 });
 
 test('readiness reports unavailable database without a success-shaped fallback', async () => {

@@ -6,7 +6,6 @@ import BrandLogo from './BrandLogo.jsx';
 const ParentDashboard = lazy(() => import('./ParentDashboard.jsx'));
 const AdminDashboard = lazy(() => import('./AdminDashboard.jsx'));
 const SpecialistDashboard = lazy(() => import('./SpecialistDashboard.jsx'));
-const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim() ?? '';
 let googleScriptPromise;
 
 function loadGoogleIdentityScript() {
@@ -34,10 +33,19 @@ function loadGoogleIdentityScript() {
   return googleScriptPromise;
 }
 
-function GoogleSignInButton({ context, disabled, onCredential, onError }) {
+function GoogleSignInButton({
+  clientId,
+  configurationLoaded,
+  configurationError,
+  onRetry,
+  context,
+  disabled,
+  onCredential,
+  onError
+}) {
   const buttonRef = useRef(null);
   const [ready, setReady] = useState(false);
-  const enabled = Boolean(googleClientId);
+  const enabled = Boolean(clientId);
 
   useEffect(() => {
     if (!enabled) return undefined;
@@ -45,8 +53,9 @@ function GoogleSignInButton({ context, disabled, onCredential, onError }) {
     loadGoogleIdentityScript()
       .then(() => {
         if (!active || !buttonRef.current) return;
+        buttonRef.current.replaceChildren();
         window.google.accounts.id.initialize({
-          client_id: googleClientId,
+          client_id: clientId,
           callback: (response) => {
             if (response.credential) void onCredential(response.credential);
           },
@@ -73,7 +82,7 @@ function GoogleSignInButton({ context, disabled, onCredential, onError }) {
         }
       });
     return () => { active = false; };
-  }, [context, enabled, onCredential, onError]);
+  }, [clientId, context, enabled, onCredential, onError]);
 
   return enabled
     ? <div className={`auth-google-button${disabled ? ' is-disabled' : ''}`} aria-busy={!ready}>
@@ -86,7 +95,14 @@ function GoogleSignInButton({ context, disabled, onCredential, onError }) {
           <span className="auth-google-mark" aria-hidden="true">G</span>
           Continue with Google
         </button>
-        <small>يتطلب تفعيل تسجيل Google من إعدادات المنصة.</small>
+        <small role={configurationError ? 'alert' : 'status'}>
+          {configurationError
+            ? `تعذر تحميل إعداد تسجيل Google: ${configurationError}`
+            : configurationLoaded
+              ? 'تسجيل Google غير مفعّل على الخادم.'
+              : 'جارٍ تحميل إعداد تسجيل Google…'}
+        </small>
+        {configurationError && <button type="button" className="auth-text-button" onClick={onRetry}>إعادة المحاولة</button>}
       </div>
     );
 }
@@ -118,6 +134,9 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
   const [busy, setBusy] = useState(false);
   const [resetToken, setResetToken] = useState('');
   const [documentUploadBusy, setDocumentUploadBusy] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [googleConfigLoaded, setGoogleConfigLoaded] = useState(false);
+  const [googleConfigError, setGoogleConfigError] = useState('');
   const queryProcessed = useRef(false);
   const authDialogRef = useRef(null);
 
@@ -158,6 +177,23 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
       window.history.replaceState({}, '', url);
     }
   }, []);
+
+  const loadGoogleConfig = useCallback(async () => {
+    setGoogleConfigError('');
+    try {
+      const { clientId } = await apiRequest('/api/v1/auth/google/config');
+      setGoogleClientId(clientId ?? '');
+    } catch (requestError) {
+      setGoogleClientId('');
+      setGoogleConfigError(requestError.message);
+    } finally {
+      setGoogleConfigLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadGoogleConfig();
+  }, [loadGoogleConfig]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -384,6 +420,10 @@ export default function AuthPanel({ standaloneDashboard = false, standaloneAdmin
   const renderGoogleOption = (context) => (
     <div className="auth-provider">
       <GoogleSignInButton
+        clientId={googleClientId}
+        configurationLoaded={googleConfigLoaded}
+        configurationError={googleConfigError}
+        onRetry={loadGoogleConfig}
         context={context}
         disabled={busy}
         onCredential={handleGoogleCredential}

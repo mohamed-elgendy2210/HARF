@@ -115,6 +115,10 @@ export function createApp({
   app.use(`${API_PREFIX}/`, requireConfiguredHttps(config));
   app.use(`${API_PREFIX}/`, requireTrustedOrigin(config.clientOrigins));
   app.use(express.json({ limit: '32kb', strict: true }));
+  app.get(`${API_PREFIX}/auth/google/config`, (_request, response) => {
+    response.set('Cache-Control', 'no-store');
+    response.json({ clientId: config.googleClientId || null });
+  });
   if (gameService && authService) {
     const databaseMiddleware = requireDatabase(getDatabaseState, ensureDatabaseConnected);
     const authenticationMiddleware = createAuthenticationMiddleware(
